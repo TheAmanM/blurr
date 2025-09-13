@@ -15,13 +15,19 @@ const Step = ({
   number,
   title,
   children,
+  isSmall = false,
 }: {
   number: number;
   title: string;
   children: React.ReactNode;
+  isSmall?: boolean;
 }) => (
-  <div className="bg-gray-700 p-4 rounded-lg">
-    <h3 className="text-lg font-semibold text-teal-300 mb-2">
+  <div className={`bg-gray-700 p-4 rounded-lg ${isSmall ? "text-sm" : ""}`}>
+    <h3
+      className={`font-semibold text-teal-300 mb-2 ${
+        isSmall ? "text-base" : "text-lg"
+      }`}
+    >
       <span className="bg-teal-500 text-gray-900 rounded-full w-6 h-6 inline-flex items-center justify-center mr-2">
         {number}
       </span>
@@ -120,36 +126,17 @@ function App() {
         }`
       );
 
+      const stream = event.streams[0] || new MediaStream([track]);
+
       if (track.kind === "video") {
         const settings = track.getSettings();
-        // Check if the track is from a screen share
         if (settings.displaySurface) {
-          setRemoteScreenStream((prev) => {
-            const newStream = prev || new MediaStream();
-            if (!newStream.getTracks().includes(track)) {
-              newStream.addTrack(track);
-            }
-            return newStream;
-          });
+          setRemoteScreenStream(stream);
         } else {
-          // It's a camera track
-          setRemoteCamStream((prev) => {
-            const newStream = prev || new MediaStream();
-            if (!newStream.getTracks().includes(track)) {
-              newStream.addTrack(track);
-            }
-            return newStream;
-          });
+          setRemoteCamStream(stream);
         }
       } else if (track.kind === "audio") {
-        // Audio is assumed to come with the camera feed
-        setRemoteCamStream((prev) => {
-          const newStream = prev || new MediaStream();
-          if (!newStream.getTracks().includes(track)) {
-            newStream.addTrack(track);
-          }
-          return newStream;
-        });
+        setRemoteCamStream(stream);
       }
     };
 
@@ -164,10 +151,27 @@ function App() {
           `[${performance.now().toFixed(2)}ms] Connection established!`
         );
         setIsConnectionEstablished(true);
+        // Clear signaling data once fully connected
+        setOfferData("");
+        setAnswerData("");
       }
     };
 
-    // Gathers ICE candidates to send to the peer
+    // **FIX**: Handles re-negotiation when tracks are added/removed
+    newPc.onnegotiationneeded = async () => {
+      console.log(`[${performance.now().toFixed(2)}ms] Negotiation needed.`);
+      if (newPc.signalingState !== "stable") {
+        console.log("--> Signaling state is not stable, skipping negotiation.");
+        return;
+      }
+      try {
+        const offer = await newPc.createOffer();
+        await newPc.setLocalDescription(offer);
+      } catch (err) {
+        console.error("Error creating negotiation offer:", err);
+      }
+    };
+
     let candidates: RTCIceCandidateInit[] = [];
     newPc.onicecandidate = (event) => {
       if (event.candidate) {
@@ -175,12 +179,11 @@ function App() {
       }
     };
 
-    // When ICE gathering is complete, package SDP and candidates for signaling
     newPc.onicegatheringstatechange = () => {
       if (newPc.iceGatheringState === "complete") {
         const sdp = newPc.localDescription;
         if (sdp) {
-          const data = { sdp, candidates };
+          const data = { sdp, candidates: [...candidates] };
           if (sdp.type === "offer") {
             setOfferData(JSON.stringify(data, null, 2));
           } else if (sdp.type === "answer") {
@@ -203,15 +206,20 @@ function App() {
     }
   };
 
-  const handleJoinCall = async () => {
+  // **FIX**: This function now handles both initial joins and re-negotiation offers.
+  const handleOffer = async (offerStr: string) => {
     if (!localCamStream) return alert("Please start your webcam first!");
-    if (!offerData.trim()) return alert("Please paste the offer data first.");
+    if (!offerStr.trim()) return alert("Please paste the offer data first.");
 
     try {
       const { sdp: offerSdp, candidates: offerCandidates } =
-        JSON.parse(offerData);
-      setCallMode("joining");
-      initializePeerConnection();
+        JSON.parse(offerStr);
+
+      if (!pc.current) {
+        setCallMode("joining");
+        initializePeerConnection();
+      }
+
       if (pc.current) {
         await pc.current.setRemoteDescription(
           new RTCSessionDescription(offerSdp)
@@ -225,23 +233,21 @@ function App() {
       }
     } catch (e) {
       alert("Invalid Offer Data format.");
-      setCallMode("idle");
+      if (!pc.current) setCallMode("idle");
     }
   };
 
-  const handleConnect = async () => {
-    if (!answerData.trim())
-      return alert("Please paste the peer's answer data.");
+  // **FIX**: This function now handles both initial connection and re-negotiation answers.
+  const handleAnswer = async (answerStr: string) => {
+    if (!answerStr.trim()) return alert("Please paste the peer's answer data.");
     if (!pc.current) return alert("Peer connection not initialized.");
 
     try {
       const { sdp: answerSdp, candidates: answerCandidates } =
-        JSON.parse(answerData);
-      if (!pc.current.currentRemoteDescription) {
-        await pc.current.setRemoteDescription(
-          new RTCSessionDescription(answerSdp)
-        );
-      }
+        JSON.parse(answerStr);
+      await pc.current.setRemoteDescription(
+        new RTCSessionDescription(answerSdp)
+      );
       for (const candidate of answerCandidates) {
         await pc.current.addIceCandidate(new RTCIceCandidate(candidate));
       }
@@ -254,12 +260,10 @@ function App() {
     pc.current?.close();
     localCamStreamRef.current?.getTracks().forEach((track) => track.stop());
     localScreenStream?.getTracks().forEach((track) => track.stop());
-
     setLocalCamStream(null);
     setLocalScreenStream(null);
     setRemoteCamStream(null);
     setRemoteScreenStream(null);
-
     setCallMode("idle");
     setOfferData("");
     setAnswerData("");
@@ -267,7 +271,6 @@ function App() {
     setIsMuted(false);
     setIsVideoOff(false);
     setIsConnectionEstablished(false);
-
     localCamStreamRef.current = null;
     screenSenderRef.current = null;
     pc.current = null;
@@ -295,14 +298,12 @@ function App() {
     if (!pc.current) return;
 
     if (screenSenderRef.current) {
-      // We are currently sharing, so stop it
       console.log(`[${performance.now().toFixed(2)}ms] Stopping screen share.`);
       pc.current.removeTrack(screenSenderRef.current);
       localScreenStream?.getTracks().forEach((track) => track.stop());
       setLocalScreenStream(null);
       screenSenderRef.current = null;
     } else {
-      // Start sharing
       console.log(`[${performance.now().toFixed(2)}ms] Starting screen share.`);
       try {
         const screenStream = await navigator.mediaDevices.getDisplayMedia({
@@ -314,16 +315,9 @@ function App() {
           screenStream
         );
         setLocalScreenStream(screenStream);
-
-        // Listen for when the user stops sharing via browser controls
         screenTrack.onended = () => {
-          console.log(
-            `[${performance
-              .now()
-              .toFixed(2)}ms] Screen share ended by user control.`
-          );
           if (screenSenderRef.current) {
-            toggleScreenShare(); // Call our function to clean up
+            toggleScreenShare();
           }
         };
       } catch (error) {
@@ -332,29 +326,21 @@ function App() {
     }
   };
 
-  // Effects to attach streams to video elements
   useEffect(() => {
-    if (localCamVideoRef.current && localCamStream) {
+    if (localCamVideoRef.current && localCamStream)
       localCamVideoRef.current.srcObject = localCamStream;
-    }
   }, [localCamStream]);
-
   useEffect(() => {
-    if (localScreenVideoRef.current && localScreenStream) {
+    if (localScreenVideoRef.current && localScreenStream)
       localScreenVideoRef.current.srcObject = localScreenStream;
-    }
   }, [localScreenStream]);
-
   useEffect(() => {
-    if (remoteCamVideoRef.current && remoteCamStream) {
+    if (remoteCamVideoRef.current && remoteCamStream)
       remoteCamVideoRef.current.srcObject = remoteCamStream;
-    }
   }, [remoteCamStream]);
-
   useEffect(() => {
-    if (remoteScreenVideoRef.current && remoteScreenStream) {
+    if (remoteScreenVideoRef.current && remoteScreenStream)
       remoteScreenVideoRef.current.srcObject = remoteScreenStream;
-    }
   }, [remoteScreenStream]);
 
   const copyToClipboard = (text: string) => {
@@ -364,7 +350,6 @@ function App() {
       .then(() => alert("Copied to clipboard!"));
   };
 
-  // --- Dynamic layout rendering ---
   const renderVideos = () => {
     const localCamVideo = localCamStream && (
       <div
@@ -383,7 +368,6 @@ function App() {
         </span>
       </div>
     );
-
     const localScreenVideo = localScreenStream && (
       <div
         key="localScreen"
@@ -401,7 +385,6 @@ function App() {
         </span>
       </div>
     );
-
     const remoteCamVideo = remoteCamStream && (
       <div
         key="remoteCam"
@@ -418,7 +401,6 @@ function App() {
         </span>
       </div>
     );
-
     const remoteScreenVideo = remoteScreenStream && (
       <div
         key="remoteScreen"
@@ -449,40 +431,22 @@ function App() {
     let mainVideos = [];
     let smallVideos = [];
 
-    // Prioritize screen shares for the main view
     if (localScreenVideo) mainVideos.push(localScreenVideo);
     if (remoteScreenVideo) mainVideos.push(remoteScreenVideo);
 
-    // Put camera feeds in the small view
     if (localCamVideo) smallVideos.push(localCamVideo);
     if (remoteCamVideo) smallVideos.push(remoteCamVideo);
-    // If connected but friend's camera is off, show a placeholder
-    else if (isConnectionEstablished && !remoteCamVideo) {
-      smallVideos.push(
-        <div
-          key="remoteCamPlaceholder"
-          className="relative bg-black rounded-lg overflow-hidden shadow-lg w-full h-full flex items-center justify-center"
-        >
-          <p className="text-gray-400 text-xs text-center">
-            Friend's camera is off
-          </p>
-        </div>
-      );
-    }
 
-    // If no one is screen sharing, camera feeds become the main view
     if (mainVideos.length === 0) {
       mainVideos = smallVideos;
       smallVideos = [];
-      // If local user started webcam but isn't connected yet, show the placeholder
       if (
         mainVideos.length === 1 &&
         localCamStream &&
         !isConnectionEstablished
       ) {
-        if (noRemoteConnectionPlaceholder) {
+        if (noRemoteConnectionPlaceholder)
           mainVideos.push(noRemoteConnectionPlaceholder);
-        }
       }
     }
 
@@ -508,6 +472,91 @@ function App() {
     );
   };
 
+  const renderSignalingUI = () => {
+    // Initial setup UI
+    if (callMode === "idle") {
+      return (
+        <div className="text-center">
+          <button
+            onClick={startWebcam}
+            disabled={!!localCamStream}
+            className="px-6 py-3 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 rounded-lg font-semibold transition-colors duration-300 mb-4"
+          >
+            1. Start Webcam
+          </button>
+          <div className="flex justify-center gap-4">
+            <button
+              onClick={handleCreateCall}
+              disabled={!localCamStream}
+              className="px-6 py-3 bg-green-600 hover:bg-green-700 disabled:bg-gray-600 rounded-lg font-semibold"
+            >
+              Create Call
+            </button>
+            <button
+              onClick={() => setCallMode("joining")}
+              disabled={!localCamStream}
+              className="px-6 py-3 bg-teal-600 hover:bg-teal-700 disabled:bg-gray-600 rounded-lg font-semibold"
+            >
+              Join Call
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    // Persistent Signaling UI for active calls
+    return (
+      <div className="grid md:grid-cols-2 gap-4 text-sm">
+        <Step
+          number={callMode === "creating" ? 2 : 1}
+          title="Peer's Offer"
+          isSmall
+        >
+          <textarea
+            value={offerData}
+            onChange={(e) => setOfferData(e.target.value)}
+            placeholder="Paste peer's offer here..."
+            className="w-full h-24 bg-gray-900 p-2 rounded font-mono text-xs"
+          />
+          <button
+            onClick={() => handleOffer(offerData)}
+            className="mt-2 w-full p-2 bg-teal-600 hover:bg-teal-700 rounded"
+          >
+            Create/Send Answer
+          </button>
+        </Step>
+        <Step
+          number={callMode === "creating" ? 3 : 2}
+          title="Peer's Answer"
+          isSmall
+        >
+          <textarea
+            value={answerData}
+            onChange={(e) => setAnswerData(e.target.value)}
+            placeholder="Paste peer's answer here..."
+            className="w-full h-24 bg-gray-900 p-2 rounded font-mono text-xs"
+          />
+          <button
+            onClick={() => handleAnswer(answerData)}
+            className="mt-2 w-full p-2 bg-green-500 hover:bg-green-600 rounded"
+          >
+            Connect
+          </button>
+        </Step>
+        <div className="md:col-span-2 text-center mt-2">
+          <button
+            onClick={() =>
+              copyToClipboard(callMode === "creating" ? offerData : answerData)
+            }
+            className="p-2 bg-gray-600 hover:bg-gray-500 rounded text-xs w-full"
+          >
+            Copy Your {callMode === "creating" ? "Offer" : "Answer"} to Send
+          </button>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="bg-gray-900 text-white min-h-screen flex flex-col items-center p-4 font-sans">
       <div
@@ -523,110 +572,8 @@ function App() {
 
         <div className="flex-grow min-h-0">{renderVideos()}</div>
 
-        <main className="flex-shrink-0 bg-gray-800 p-6 rounded-lg shadow-2xl mt-4">
-          {!isConnectionEstablished ? (
-            <>
-              {callMode === "idle" && (
-                <div className="text-center">
-                  <button
-                    onClick={startWebcam}
-                    disabled={!!localCamStream}
-                    className="px-6 py-3 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 rounded-lg font-semibold transition-colors duration-300 mb-4"
-                  >
-                    1. Start Webcam
-                  </button>
-                  <div className="flex justify-center gap-4">
-                    <button
-                      onClick={handleCreateCall}
-                      disabled={!localCamStream}
-                      className="px-6 py-3 bg-green-600 hover:bg-green-700 disabled:bg-gray-600 rounded-lg font-semibold"
-                    >
-                      Create Call
-                    </button>
-                    <button
-                      onClick={() => setCallMode("joining")}
-                      disabled={!localCamStream}
-                      className="px-6 py-3 bg-teal-600 hover:bg-teal-700 disabled:bg-gray-600 rounded-lg font-semibold"
-                    >
-                      Join Call
-                    </button>
-                  </div>
-                </div>
-              )}
-              {callMode === "creating" && (
-                <div className="flex flex-col gap-4">
-                  <Step number={2} title="Copy & Send Offer">
-                    <textarea
-                      value={offerData}
-                      readOnly
-                      className="w-full h-24 bg-gray-900 p-2 rounded font-mono text-xs"
-                    ></textarea>
-                    <button
-                      onClick={() => copyToClipboard(offerData)}
-                      className="mt-2 w-full p-2 bg-gray-600 hover:bg-gray-500 rounded"
-                    >
-                      Copy Offer
-                    </button>
-                  </Step>
-                  <Step number={3} title="Paste Peer's Answer">
-                    <textarea
-                      value={answerData}
-                      onChange={(e) => setAnswerData(e.target.value)}
-                      className="w-full h-24 bg-gray-900 p-2 rounded font-mono text-xs"
-                    ></textarea>
-                  </Step>
-                  <button
-                    onClick={handleConnect}
-                    className="w-full p-3 bg-green-500 hover:bg-green-600 rounded font-bold text-lg"
-                  >
-                    4. Connect
-                  </button>
-                </div>
-              )}
-              {callMode === "joining" && (
-                <div className="flex flex-col gap-4">
-                  <Step number={2} title="Paste Peer's Offer">
-                    <textarea
-                      value={offerData}
-                      onChange={(e) => setOfferData(e.target.value)}
-                      className="w-full h-24 bg-gray-900 p-2 rounded font-mono text-xs"
-                    ></textarea>
-                    <button
-                      onClick={handleJoinCall}
-                      className="mt-2 w-full p-2 bg-teal-600 hover:bg-teal-700 rounded"
-                    >
-                      Create Answer from Offer
-                    </button>
-                  </Step>
-                  {answerData && (
-                    <Step number={3} title="Copy & Send Your Answer">
-                      <textarea
-                        value={answerData}
-                        readOnly
-                        className="w-full h-24 bg-gray-900 p-2 rounded font-mono text-xs"
-                      ></textarea>
-                      <button
-                        onClick={() => copyToClipboard(answerData)}
-                        className="mt-2 w-full p-2 bg-gray-600 hover:bg-gray-500 rounded"
-                      >
-                        Copy Your Answer
-                      </button>
-                    </Step>
-                  )}
-                </div>
-              )}
-              {callMode !== "idle" && (
-                <div className="text-center mt-6">
-                  <button
-                    onClick={hangUp}
-                    className="px-8 py-3 bg-red-600 hover:bg-red-700 rounded-lg font-semibold"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              )}
-            </>
-          ) : (
+        <main className="flex-shrink-0 bg-gray-800 p-6 rounded-lg shadow-2xl mt-4 space-y-4">
+          {callMode !== "idle" && (
             <div className="flex justify-center items-center gap-4 h-full">
               <button
                 onClick={toggleMic}
@@ -748,6 +695,19 @@ function App() {
                     />
                   </g>
                 </svg>
+              </button>
+            </div>
+          )}
+
+          {renderSignalingUI()}
+
+          {callMode !== "idle" && (
+            <div className="text-center">
+              <button
+                onClick={hangUp}
+                className="px-8 py-2 bg-red-800 hover:bg-red-700 rounded-lg font-semibold text-sm"
+              >
+                Cancel / End Call
               </button>
             </div>
           )}
