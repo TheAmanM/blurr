@@ -1,69 +1,127 @@
-# React + TypeScript + Vite
+# Privacy Redactor RT
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Real-time sensitive information detection and redaction system for video streams.
 
-Currently, two official plugins are available:
+## Features
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+- Real-time video processing at 720p @ 30 FPS
+- Multi-category sensitive data detection (phone numbers, credit cards, emails, addresses, API keys)
+- Configurable redaction methods (gaussian blur, pixelation, solid color)
+- WebRTC integration for live streaming
+- Optional MP4 recording with audio preservation
+- Privacy-preserving audit logging
+- Streamlit web interface
+- CLI for offline processing
 
-## Expanding the ESLint configuration
+## Installation
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+### Requirements
 
-```js
-export default tseslint.config([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+- Python 3.11+
+- CPU-only operation (no GPU required)
 
-      // Remove tseslint.configs.recommended and replace with this
-      ...tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      ...tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      ...tseslint.configs.stylisticTypeChecked,
+### Setup
 
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+# Clone repository
+git clone <repository-url>
+cd privacy-redactor-rt
+
+# Set up development environment
+make setup
+
+# Or install in production mode
+make install
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+## Usage
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+### Web Interface
 
-export default tseslint.config([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+# Run Streamlit app
+make run-app
+# or
+streamlit run privacy_redactor_rt/app.py
 ```
+
+### CLI Interface
+
+```bash
+# Process video file
+privacy-redactor-rt redact-video input.mp4 output.mp4
+
+# With custom configuration
+privacy-redactor-rt redact-video input.mp4 output.mp4 --config-file custom.yaml
+```
+
+## Configuration
+
+Configuration is managed through YAML files. See `default.yaml` for all available options.
+
+Key configuration sections:
+- `io`: Input/output settings (resolution, FPS)
+- `realtime`: Performance tuning (detection stride, queue limits)
+- `detection`: Text detection parameters
+- `classification`: Sensitive data categories and thresholds
+- `redaction`: Redaction methods and parameters
+
+## Development
+
+### Code Quality
+
+```bash
+# Format code
+make format
+
+# Run linting
+make lint
+
+# Run tests
+make test
+```
+
+### Docker
+
+```bash
+# Build image
+make docker-build
+
+# Run container
+make docker-run
+```
+
+## Architecture
+
+The system uses a multi-threaded pipeline architecture:
+
+1. **Video Input**: Webcam, RTSP, or file input with frame normalization
+2. **Text Detection**: PaddleOCR-based text detection with configurable stride
+3. **Optical Flow Tracking**: Sparse optical flow for bounding box propagation
+4. **OCR Processing**: Asynchronous text recognition with queue management
+5. **Classification**: Multi-category pattern matching and validation
+6. **Temporal Consensus**: Flicker prevention through consecutive frame matching
+7. **Redaction**: Configurable blur/pixelate/solid methods
+8. **Output**: WebRTC streaming and optional MP4 recording
+
+## Performance
+
+Target performance: 720p @ 30 FPS on CPU-only hardware
+
+Optimization features:
+- Intelligent frame skipping (detection every N frames)
+- Optical flow propagation between detections
+- Asynchronous OCR processing
+- Temporal consensus for stability
+- Automatic quality scaling under load
+
+## Privacy
+
+- All processing is local-only (no network calls)
+- Audit logs use privacy-preserving text masking
+- Optional `--no-log-text` flag for maximum privacy
+- Configurable text preview masking (first/last 3 characters)
+
+## License
+
+MIT License - see LICENSE file for details.

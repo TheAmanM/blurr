@@ -1,0 +1,52 @@
+# Privacy Redactor RT Default Configuration
+
+io:
+  target_width: 1280
+  target_height: 720
+  target_fps: 30
+  letterbox: true
+
+realtime:
+  detector_stride: 3
+  ocr_refresh_stride: 10
+  max_parallel_ocr: 1
+  max_queue: 2
+
+detection:
+  min_text_confidence: 0.6
+  bbox_inflate_px: 6
+  min_box_size: [10, 10]
+
+ocr:
+  confidence_threshold: 0.7
+  max_queue_size: 5
+  timeout_seconds: 2.0
+
+classification:
+  require_temporal_consensus: 2
+  categories:
+    - phone
+    - credit_card
+    - email
+    - address
+    - api_key
+  entropy_threshold_bits_per_char: 3.5
+
+tracking:
+  iou_threshold: 0.5
+  max_age: 30
+  min_hits: 3
+  smoothing_window: 5
+
+redaction:
+  default_method: gaussian
+  gaussian_kernel_size: 15
+  pixelate_block_size: 8
+  solid_color: [0, 0, 0]
+  per_category_methods: {}
+
+logging:
+  enable_audit_log: true
+  log_text_previews: true
+  mask_characters: true
+  log_file_path: "detections.jsonl"
