@@ -53,17 +53,24 @@ function App() {
    * Initializes the webcam and microphone stream.
    */
   const startWebcam = async () => {
+    console.log(`[${performance.now().toFixed(2)}ms] Starting webcam...`);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: true,
         audio: true,
       });
+      console.log(
+        `[${performance.now().toFixed(2)}ms] Webcam started successfully.`
+      );
       setLocalStream(stream);
       if (localVideoRef.current) {
         localVideoRef.current.srcObject = stream;
       }
     } catch (error) {
-      console.error("Error accessing media devices.", error);
+      console.error(
+        `[${performance.now().toFixed(2)}ms] Error accessing media devices:`,
+        error
+      );
       alert("Could not access webcam. Please check permissions.");
     }
   };
@@ -72,10 +79,16 @@ function App() {
    * Initializes the RTCPeerConnection object and sets up listeners.
    */
   const initializePeerConnection = () => {
+    console.log(
+      `[${performance.now().toFixed(2)}ms] Initializing Peer Connection...`
+    );
     const newPc = new RTCPeerConnection(servers);
 
     // Add local stream tracks to the connection
     if (localStream) {
+      console.log(
+        `[${performance.now().toFixed(2)}ms] Adding local stream tracks.`
+      );
       localStream.getTracks().forEach((track) => {
         newPc.addTrack(track, localStream);
       });
@@ -83,6 +96,10 @@ function App() {
 
     // Handle incoming remote stream
     newPc.ontrack = (event) => {
+      console.log(
+        `[${performance.now().toFixed(2)}ms] Remote track received.`,
+        event
+      );
       setRemoteStream(event.streams[0]);
     };
 
@@ -90,20 +107,38 @@ function App() {
     let candidates: RTCIceCandidateInit[] = [];
     newPc.onicecandidate = (event) => {
       if (event.candidate) {
+        console.log(
+          `[${performance.now().toFixed(2)}ms] Found ICE candidate:`,
+          event.candidate
+        );
         candidates.push(event.candidate.toJSON());
       }
     };
 
     // When gathering is complete, set the offer/answer data
     newPc.onicegatheringstatechange = () => {
+      console.log(
+        `[${performance.now().toFixed(2)}ms] ICE gathering state changed: ${
+          newPc.iceGatheringState
+        }`
+      );
       if (newPc.iceGatheringState === "complete") {
+        console.log(
+          `[${performance.now().toFixed(2)}ms] ICE gathering complete.`
+        );
         const sdp = newPc.localDescription;
         if (sdp) {
           const data = { sdp, candidates };
           // BUG FIX: Differentiate between setting offer and answer data based on SDP type
           if (sdp.type === "offer") {
+            console.log(
+              `[${performance.now().toFixed(2)}ms] Setting offer data.`
+            );
             setOfferData(JSON.stringify(data, null, 2));
           } else if (sdp.type === "answer") {
+            console.log(
+              `[${performance.now().toFixed(2)}ms] Setting answer data.`
+            );
             setAnswerData(JSON.stringify(data, null, 2));
           }
         }
@@ -117,12 +152,22 @@ function App() {
    * Handles creating a call offer.
    */
   const handleCreateCall = async () => {
+    console.log(
+      `[${performance.now().toFixed(2)}ms] handleCreateCall started.`
+    );
     if (!localStream) return alert("Please start your webcam first!");
     setCallMode("creating");
     initializePeerConnection();
     if (pc.current) {
+      console.log(`[${performance.now().toFixed(2)}ms] Creating offer...`);
       const offer = await pc.current.createOffer();
+      console.log(
+        `[${performance
+          .now()
+          .toFixed(2)}ms] Offer created. Setting local description...`
+      );
       await pc.current.setLocalDescription(offer);
+      console.log(`[${performance.now().toFixed(2)}ms] Local description set.`);
     }
   };
 
@@ -130,6 +175,7 @@ function App() {
    * Handles joining a call and creating an answer.
    */
   const handleJoinCall = async () => {
+    console.log(`[${performance.now().toFixed(2)}ms] handleJoinCall started.`);
     if (!localStream) return alert("Please start your webcam first!");
     if (!offerData.trim()) return alert("Please paste the offer data first.");
 
@@ -139,19 +185,47 @@ function App() {
       setCallMode("joining");
       initializePeerConnection();
       if (pc.current) {
+        console.log(
+          `[${performance
+            .now()
+            .toFixed(2)}ms] Setting remote description from offer...`
+        );
         await pc.current.setRemoteDescription(
           new RTCSessionDescription(offerSdp)
         );
+        console.log(
+          `[${performance
+            .now()
+            .toFixed(2)}ms] Remote description set. Creating answer...`
+        );
         const answer = await pc.current.createAnswer();
+        console.log(
+          `[${performance
+            .now()
+            .toFixed(2)}ms] Answer created. Setting local description...`
+        );
         await pc.current.setLocalDescription(answer);
+        console.log(
+          `[${performance.now().toFixed(2)}ms] Local description set. Adding ${
+            offerCandidates.length
+          } remote ICE candidates...`
+        );
 
         // Add candidates from the offer
         for (const candidate of offerCandidates) {
           await pc.current.addIceCandidate(new RTCIceCandidate(candidate));
         }
+        console.log(
+          `[${performance
+            .now()
+            .toFixed(2)}ms] Finished adding remote ICE candidates.`
+        );
       }
     } catch (e) {
-      console.error(e);
+      console.error(
+        `[${performance.now().toFixed(2)}ms] Error in handleJoinCall:`,
+        e
+      );
       alert("Invalid Offer Data format.");
       setCallMode("idle");
     }
@@ -161,6 +235,7 @@ function App() {
    * Connects the peers using the answer data.
    */
   const handleConnect = async () => {
+    console.log(`[${performance.now().toFixed(2)}ms] handleConnect started.`);
     if (!answerData.trim())
       return alert("Please paste the peer's answer data.");
     if (!pc.current) return alert("Peer connection not initialized.");
@@ -169,15 +244,36 @@ function App() {
       const { sdp: answerSdp, candidates: answerCandidates } =
         JSON.parse(answerData);
       if (!pc.current.currentRemoteDescription) {
+        console.log(
+          `[${performance
+            .now()
+            .toFixed(2)}ms] Setting remote description from answer...`
+        );
         await pc.current.setRemoteDescription(
           new RTCSessionDescription(answerSdp)
         );
+        console.log(
+          `[${performance.now().toFixed(2)}ms] Remote description set.`
+        );
       }
+      console.log(
+        `[${performance.now().toFixed(2)}ms] Adding ${
+          answerCandidates.length
+        } remote ICE candidates from answer...`
+      );
       for (const candidate of answerCandidates) {
         await pc.current.addIceCandidate(new RTCIceCandidate(candidate));
       }
+      console.log(
+        `[${performance
+          .now()
+          .toFixed(2)}ms] Finished adding remote ICE candidates from answer.`
+      );
     } catch (e) {
-      console.error(e);
+      console.error(
+        `[${performance.now().toFixed(2)}ms] Error in handleConnect:`,
+        e
+      );
       alert("Invalid Answer Data format.");
     }
   };
@@ -186,6 +282,7 @@ function App() {
    * Resets the application state to hang up the call.
    */
   const hangUp = () => {
+    console.log(`[${performance.now().toFixed(2)}ms] Hanging up call.`);
     pc.current?.close();
     pc.current = null;
     localStream?.getTracks().forEach((track) => track.stop());
