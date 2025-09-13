@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from "react";
 
-// --- STUN servers for NAT traversal (still needed) ---
+// --- STUN servers for NAT traversal ---
 const servers = {
   iceServers: [
     {
@@ -32,25 +32,37 @@ const Step = ({
 );
 
 function App() {
-  // State variables
-  const [localStream, setLocalStream] = useState<MediaStream | null>(null);
-  const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
+  // State variables for media streams
+  const [localCamStream, setLocalCamStream] = useState<MediaStream | null>(
+    null
+  );
+  const [localScreenStream, setLocalScreenStream] =
+    useState<MediaStream | null>(null);
+  const [remoteCamStream, setRemoteCamStream] = useState<MediaStream | null>(
+    null
+  );
+  const [remoteScreenStream, setRemoteScreenStream] =
+    useState<MediaStream | null>(null);
+
+  // State for call logic and UI
   const [callMode, setCallMode] = useState<"idle" | "creating" | "joining">(
     "idle"
   );
   const [isMuted, setIsMuted] = useState(false);
   const [isVideoOff, setIsVideoOff] = useState(false);
-  const [isScreenSharing, setIsScreenSharing] = useState(false);
-  const [isRemoteScreenSharing, setIsRemoteScreenSharing] = useState(false);
   const [showEndCallConfirm, setShowEndCallConfirm] = useState(false);
   const [isConnectionEstablished, setIsConnectionEstablished] = useState(false);
 
-  // useRef for mutable objects that don't trigger re-renders
+  // Refs for non-re-rendering objects
   const pc = useRef<RTCPeerConnection | null>(null);
-  const localVideoRef = useRef<HTMLVideoElement>(null);
-  const remoteVideoRef = useRef<HTMLVideoElement>(null);
-  const webcamStreamRef = useRef<MediaStream | null>(null);
-  const screenStreamRef = useRef<MediaStream | null>(null);
+  const localCamStreamRef = useRef<MediaStream | null>(null);
+  const screenSenderRef = useRef<RTCRtpSender | null>(null);
+
+  // Refs for video elements
+  const localCamVideoRef = useRef<HTMLVideoElement>(null);
+  const localScreenVideoRef = useRef<HTMLVideoElement>(null);
+  const remoteCamVideoRef = useRef<HTMLVideoElement>(null);
+  const remoteScreenVideoRef = useRef<HTMLVideoElement>(null);
 
   // Textarea state for manual signaling
   const [offerData, setOfferData] = useState("");
@@ -69,11 +81,8 @@ function App() {
       console.log(
         `[${performance.now().toFixed(2)}ms] Webcam started successfully.`
       );
-      webcamStreamRef.current = stream; // Keep a reference to the webcam stream
-      setLocalStream(stream);
-      if (localVideoRef.current) {
-        localVideoRef.current.srcObject = stream;
-      }
+      localCamStreamRef.current = stream;
+      setLocalCamStream(stream);
     } catch (error) {
       console.error(
         `[${performance.now().toFixed(2)}ms] Error accessing media devices:`,
@@ -92,22 +101,56 @@ function App() {
     );
     const newPc = new RTCPeerConnection(servers);
 
-    // Add local stream tracks to the connection
-    if (webcamStreamRef.current) {
+    // Add local camera tracks to the connection initially
+    if (localCamStreamRef.current) {
       console.log(
-        `[${performance.now().toFixed(2)}ms] Adding local stream tracks.`
+        `[${performance.now().toFixed(2)}ms] Adding local camera tracks.`
       );
-      webcamStreamRef.current.getTracks().forEach((track) => {
-        newPc.addTrack(track, webcamStreamRef.current!);
+      localCamStreamRef.current.getTracks().forEach((track) => {
+        newPc.addTrack(track, localCamStreamRef.current!);
       });
     }
 
+    // Handles incoming tracks from the remote peer
     newPc.ontrack = (event) => {
+      const track = event.track;
       console.log(
-        `[${performance.now().toFixed(2)}ms] Remote track received.`,
-        event
+        `[${performance.now().toFixed(2)}ms] Remote track received: ${
+          track.kind
+        }`
       );
-      setRemoteStream(event.streams[0]);
+
+      if (track.kind === "video") {
+        const settings = track.getSettings();
+        // Check if the track is from a screen share
+        if (settings.displaySurface) {
+          setRemoteScreenStream((prev) => {
+            const newStream = prev || new MediaStream();
+            if (!newStream.getTracks().includes(track)) {
+              newStream.addTrack(track);
+            }
+            return newStream;
+          });
+        } else {
+          // It's a camera track
+          setRemoteCamStream((prev) => {
+            const newStream = prev || new MediaStream();
+            if (!newStream.getTracks().includes(track)) {
+              newStream.addTrack(track);
+            }
+            return newStream;
+          });
+        }
+      } else if (track.kind === "audio") {
+        // Audio is assumed to come with the camera feed
+        setRemoteCamStream((prev) => {
+          const newStream = prev || new MediaStream();
+          if (!newStream.getTracks().includes(track)) {
+            newStream.addTrack(track);
+          }
+          return newStream;
+        });
+      }
     };
 
     newPc.onconnectionstatechange = () => {
@@ -124,6 +167,7 @@ function App() {
       }
     };
 
+    // Gathers ICE candidates to send to the peer
     let candidates: RTCIceCandidateInit[] = [];
     newPc.onicecandidate = (event) => {
       if (event.candidate) {
@@ -131,6 +175,7 @@ function App() {
       }
     };
 
+    // When ICE gathering is complete, package SDP and candidates for signaling
     newPc.onicegatheringstatechange = () => {
       if (newPc.iceGatheringState === "complete") {
         const sdp = newPc.localDescription;
@@ -149,7 +194,7 @@ function App() {
   };
 
   const handleCreateCall = async () => {
-    if (!localStream) return alert("Please start your webcam first!");
+    if (!localCamStream) return alert("Please start your webcam first!");
     setCallMode("creating");
     initializePeerConnection();
     if (pc.current) {
@@ -159,7 +204,7 @@ function App() {
   };
 
   const handleJoinCall = async () => {
-    if (!localStream) return alert("Please start your webcam first!");
+    if (!localCamStream) return alert("Please start your webcam first!");
     if (!offerData.trim()) return alert("Please paste the offer data first.");
 
     try {
@@ -207,11 +252,14 @@ function App() {
 
   const hangUp = () => {
     pc.current?.close();
-    webcamStreamRef.current?.getTracks().forEach((track) => track.stop());
-    screenStreamRef.current?.getTracks().forEach((track) => track.stop());
+    localCamStreamRef.current?.getTracks().forEach((track) => track.stop());
+    localScreenStream?.getTracks().forEach((track) => track.stop());
 
-    setLocalStream(null);
-    setRemoteStream(null);
+    setLocalCamStream(null);
+    setLocalScreenStream(null);
+    setRemoteCamStream(null);
+    setRemoteScreenStream(null);
+
     setCallMode("idle");
     setOfferData("");
     setAnswerData("");
@@ -219,13 +267,15 @@ function App() {
     setIsMuted(false);
     setIsVideoOff(false);
     setIsConnectionEstablished(false);
-    setIsScreenSharing(false);
-    setIsRemoteScreenSharing(false);
+
+    localCamStreamRef.current = null;
+    screenSenderRef.current = null;
+    pc.current = null;
   };
 
   const toggleMic = () => {
-    if (webcamStreamRef.current) {
-      webcamStreamRef.current.getAudioTracks().forEach((track) => {
+    if (localCamStreamRef.current) {
+      localCamStreamRef.current.getAudioTracks().forEach((track) => {
         track.enabled = !track.enabled;
       });
       setIsMuted((prev) => !prev);
@@ -233,8 +283,8 @@ function App() {
   };
 
   const toggleVideo = () => {
-    if (webcamStreamRef.current) {
-      webcamStreamRef.current.getVideoTracks().forEach((track) => {
+    if (localCamStreamRef.current) {
+      localCamStreamRef.current.getVideoTracks().forEach((track) => {
         track.enabled = !track.enabled;
       });
       setIsVideoOff((prev) => !prev);
@@ -242,35 +292,38 @@ function App() {
   };
 
   const toggleScreenShare = async () => {
-    if (!pc.current || !webcamStreamRef.current) return;
+    if (!pc.current) return;
 
-    const videoSender = pc.current
-      .getSenders()
-      .find((s) => s.track?.kind === "video");
-    if (!videoSender) return console.error("Video sender not found");
-
-    if (isScreenSharing) {
-      // Stop screen sharing, switch back to webcam
-      const webcamTrack = webcamStreamRef.current.getVideoTracks()[0];
-      await videoSender.replaceTrack(webcamTrack);
-      screenStreamRef.current?.getTracks().forEach((track) => track.stop());
-      setLocalStream(webcamStreamRef.current);
-      setIsScreenSharing(false);
+    if (screenSenderRef.current) {
+      // We are currently sharing, so stop it
+      console.log(`[${performance.now().toFixed(2)}ms] Stopping screen share.`);
+      pc.current.removeTrack(screenSenderRef.current);
+      localScreenStream?.getTracks().forEach((track) => track.stop());
+      setLocalScreenStream(null);
+      screenSenderRef.current = null;
     } else {
-      // Start screen sharing
+      // Start sharing
+      console.log(`[${performance.now().toFixed(2)}ms] Starting screen share.`);
       try {
         const screenStream = await navigator.mediaDevices.getDisplayMedia({
           video: true,
         });
-        screenStreamRef.current = screenStream;
         const screenTrack = screenStream.getVideoTracks()[0];
-        await videoSender.replaceTrack(screenTrack);
-        setLocalStream(screenStream);
-        setIsScreenSharing(true);
-        // Handle user stopping screen share from browser controls
+        screenSenderRef.current = pc.current.addTrack(
+          screenTrack,
+          screenStream
+        );
+        setLocalScreenStream(screenStream);
+
+        // Listen for when the user stops sharing via browser controls
         screenTrack.onended = () => {
-          if (isScreenSharing) {
-            toggleScreenShare();
+          console.log(
+            `[${performance
+              .now()
+              .toFixed(2)}ms] Screen share ended by user control.`
+          );
+          if (screenSenderRef.current) {
+            toggleScreenShare(); // Call our function to clean up
           }
         };
       } catch (error) {
@@ -279,28 +332,30 @@ function App() {
     }
   };
 
+  // Effects to attach streams to video elements
   useEffect(() => {
-    if (localVideoRef.current && localStream) {
-      localVideoRef.current.srcObject = localStream;
+    if (localCamVideoRef.current && localCamStream) {
+      localCamVideoRef.current.srcObject = localCamStream;
     }
-  }, [localStream]);
+  }, [localCamStream]);
 
   useEffect(() => {
-    if (remoteVideoRef.current && remoteStream) {
-      remoteVideoRef.current.srcObject = remoteStream;
+    if (localScreenVideoRef.current && localScreenStream) {
+      localScreenVideoRef.current.srcObject = localScreenStream;
     }
-    if (remoteStream) {
-      const videoTrack = remoteStream.getVideoTracks()[0];
-      if (videoTrack) {
-        // A simple heuristic to detect screen sharing on the remote end.
-        const settings = videoTrack.getSettings();
-        // displaySurface is a strong indicator of a screen share track.
-        setIsRemoteScreenSharing(!!settings.displaySurface);
-      }
-    } else {
-      setIsRemoteScreenSharing(false);
+  }, [localScreenStream]);
+
+  useEffect(() => {
+    if (remoteCamVideoRef.current && remoteCamStream) {
+      remoteCamVideoRef.current.srcObject = remoteCamStream;
     }
-  }, [remoteStream]);
+  }, [remoteCamStream]);
+
+  useEffect(() => {
+    if (remoteScreenVideoRef.current && remoteScreenStream) {
+      remoteScreenVideoRef.current.srcObject = remoteScreenStream;
+    }
+  }, [remoteScreenStream]);
 
   const copyToClipboard = (text: string) => {
     if (!text) return;
@@ -309,74 +364,133 @@ function App() {
       .then(() => alert("Copied to clipboard!"));
   };
 
-  // Dynamic layout rendering
+  // --- Dynamic layout rendering ---
   const renderVideos = () => {
-    const localVideoElement = (
+    const localCamVideo = localCamStream && (
       <div
-        key="local"
+        key="localCam"
         className="relative bg-black rounded-lg overflow-hidden shadow-lg w-full h-full"
       >
         <video
-          ref={localVideoRef}
+          ref={localCamVideoRef}
           autoPlay
           playsInline
           muted
           className="w-full h-full object-contain"
         />
         <span className="absolute bottom-2 left-2 bg-black bg-opacity-50 text-white text-sm px-2 py-1 rounded">
-          {isScreenSharing ? "Your Screen" : "You"}
+          You
         </span>
       </div>
     );
-    const remoteVideoElement = (
+
+    const localScreenVideo = localScreenStream && (
       <div
-        key="remote"
-        className="relative bg-black rounded-lg overflow-hidden shadow-lg w-full h-full flex items-center justify-center"
+        key="localScreen"
+        className="relative bg-black rounded-lg overflow-hidden shadow-lg w-full h-full"
       >
-        {remoteStream ? (
-          <>
-            <video
-              ref={remoteVideoRef}
-              autoPlay
-              playsInline
-              className="w-full h-full object-contain"
-            />
-            <span className="absolute bottom-2 left-2 bg-black bg-opacity-50 text-white text-sm px-2 py-1 rounded">
-              {isRemoteScreenSharing ? "Friend's Screen" : "Friend"}
-            </span>
-          </>
-        ) : (
-          <p className="text-gray-400">No connection yet</p>
-        )}
+        <video
+          ref={localScreenVideoRef}
+          autoPlay
+          playsInline
+          muted
+          className="w-full h-full object-contain"
+        />
+        <span className="absolute bottom-2 left-2 bg-black bg-opacity-50 text-white text-sm px-2 py-1 rounded">
+          Your Screen
+        </span>
       </div>
     );
 
-    // **FIX**: Conditionally render layout based on screen sharing state.
-    if (!isScreenSharing && !isRemoteScreenSharing) {
-      // Default view: two videos side-by-side
-      return (
-        <div className="grid md:grid-cols-2 gap-4 h-full">
-          {localVideoElement}
-          {remoteVideoElement}
+    const remoteCamVideo = remoteCamStream && (
+      <div
+        key="remoteCam"
+        className="relative bg-black rounded-lg overflow-hidden shadow-lg w-full h-full"
+      >
+        <video
+          ref={remoteCamVideoRef}
+          autoPlay
+          playsInline
+          className="w-full h-full object-contain"
+        />
+        <span className="absolute bottom-2 left-2 bg-black bg-opacity-50 text-white text-sm px-2 py-1 rounded">
+          Friend
+        </span>
+      </div>
+    );
+
+    const remoteScreenVideo = remoteScreenStream && (
+      <div
+        key="remoteScreen"
+        className="relative bg-black rounded-lg overflow-hidden shadow-lg w-full h-full"
+      >
+        <video
+          ref={remoteScreenVideoRef}
+          autoPlay
+          playsInline
+          className="w-full h-full object-contain"
+        />
+        <span className="absolute bottom-2 left-2 bg-black bg-opacity-50 text-white text-sm px-2 py-1 rounded">
+          Friend's Screen
+        </span>
+      </div>
+    );
+
+    const noRemoteConnectionPlaceholder = !remoteCamStream &&
+      !remoteScreenStream && (
+        <div
+          key="remotePlaceholder"
+          className="relative bg-black rounded-lg overflow-hidden shadow-lg w-full h-full flex items-center justify-center"
+        >
+          <p className="text-gray-400">No connection yet</p>
+        </div>
+      );
+
+    let mainVideos = [];
+    let smallVideos = [];
+
+    // Prioritize screen shares for the main view
+    if (localScreenVideo) mainVideos.push(localScreenVideo);
+    if (remoteScreenVideo) mainVideos.push(remoteScreenVideo);
+
+    // Put camera feeds in the small view
+    if (localCamVideo) smallVideos.push(localCamVideo);
+    if (remoteCamVideo) smallVideos.push(remoteCamVideo);
+    // If connected but friend's camera is off, show a placeholder
+    else if (isConnectionEstablished && !remoteCamVideo) {
+      smallVideos.push(
+        <div
+          key="remoteCamPlaceholder"
+          className="relative bg-black rounded-lg overflow-hidden shadow-lg w-full h-full flex items-center justify-center"
+        >
+          <p className="text-gray-400 text-xs text-center">
+            Friend's camera is off
+          </p>
         </div>
       );
     }
 
-    // Screen sharing view
-    const mainVideos = [];
-    const smallVideos = [];
-
-    if (isScreenSharing) mainVideos.push(localVideoElement);
-    else smallVideos.push(localVideoElement);
-
-    if (isRemoteScreenSharing) mainVideos.push(remoteVideoElement);
-    else smallVideos.push(remoteVideoElement);
+    // If no one is screen sharing, camera feeds become the main view
+    if (mainVideos.length === 0) {
+      mainVideos = smallVideos;
+      smallVideos = [];
+      // If local user started webcam but isn't connected yet, show the placeholder
+      if (
+        mainVideos.length === 1 &&
+        localCamStream &&
+        !isConnectionEstablished
+      ) {
+        if (noRemoteConnectionPlaceholder) {
+          mainVideos.push(noRemoteConnectionPlaceholder);
+        }
+      }
+    }
 
     return (
       <div className="flex flex-col h-full">
         <div
           className={`flex-grow grid gap-4 ${
-            mainVideos.length > 1 ? "grid-cols-2" : "grid-cols-1"
+            mainVideos.length > 1 ? "md:grid-cols-2" : "grid-cols-1"
           }`}
         >
           {mainVideos}
@@ -416,7 +530,7 @@ function App() {
                 <div className="text-center">
                   <button
                     onClick={startWebcam}
-                    disabled={!!localStream}
+                    disabled={!!localCamStream}
                     className="px-6 py-3 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 rounded-lg font-semibold transition-colors duration-300 mb-4"
                   >
                     1. Start Webcam
@@ -424,14 +538,14 @@ function App() {
                   <div className="flex justify-center gap-4">
                     <button
                       onClick={handleCreateCall}
-                      disabled={!localStream}
+                      disabled={!localCamStream}
                       className="px-6 py-3 bg-green-600 hover:bg-green-700 disabled:bg-gray-600 rounded-lg font-semibold"
                     >
                       Create Call
                     </button>
                     <button
                       onClick={() => setCallMode("joining")}
-                      disabled={!localStream}
+                      disabled={!localCamStream}
                       className="px-6 py-3 bg-teal-600 hover:bg-teal-700 disabled:bg-gray-600 rounded-lg font-semibold"
                     >
                       Join Call
@@ -599,7 +713,7 @@ function App() {
               <button
                 onClick={toggleScreenShare}
                 className={`p-4 rounded-full transition-colors ${
-                  isScreenSharing
+                  !!localScreenStream
                     ? "bg-blue-500"
                     : "bg-gray-600 hover:bg-gray-500"
                 }`}
