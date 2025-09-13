@@ -37,6 +37,7 @@ const servers = {
   iceCandidatePoolSize: 10,
 };
 
+// --- Helper component for instructional steps ---
 function App() {
   // State variables for media streams
   const [localCamStream, setLocalCamStream] = useState<MediaStream | null>(
@@ -179,9 +180,13 @@ function App() {
     // Listen for the answer and remote ICE candidates
     unsubscribeCall.current = onSnapshot(callDocRef, (snapshot) => {
       const data = snapshot.data();
-      if (pc.current && !pc.current.currentRemoteDescription && data?.answer) {
-        const answerDescription = new RTCSessionDescription(data.answer);
-        pc.current.setRemoteDescription(answerDescription);
+      // This now correctly handles new answers during re-negotiation
+      if (pc.current && data?.answer) {
+        const remoteDesc = pc.current.currentRemoteDescription;
+        if (!remoteDesc || remoteDesc.sdp !== data.answer.sdp) {
+          const answerDescription = new RTCSessionDescription(data.answer);
+          pc.current.setRemoteDescription(answerDescription);
+        }
       }
     });
 
