@@ -10,6 +10,7 @@ import {
   onSnapshot,
   updateDoc,
   writeBatch,
+  query,
 } from "firebase/firestore";
 
 // --- Firebase Configuration ---
@@ -37,7 +38,6 @@ const servers = {
   iceCandidatePoolSize: 10,
 };
 
-// --- Helper component for instructional steps ---
 function App() {
   // State variables for media streams
   const [localCamStream, setLocalCamStream] = useState<MediaStream | null>(
@@ -65,7 +65,7 @@ function App() {
   const pc = useRef<RTCPeerConnection | null>(null);
   const localCamStreamRef = useRef<MediaStream | null>(null);
   const screenSenderRef = useRef<RTCRtpSender | null>(null);
-  const unsubscribeCall = useRef<() => void | null>(null);
+  const signalingUnsubscribers = useRef<(() => void)[]>([]);
 
   // Refs for video elements
   const localCamVideoRef = useRef<HTMLVideoElement>(null);
@@ -91,20 +91,57 @@ function App() {
   };
 
   /**
+   * Sets up a universal listener for signaling messages (offers/answers) from Firestore.
+   */
+  const setupSignalingListeners = (callDocRef: any, isCaller: boolean) => {
+    const mainUnsubscriber = onSnapshot(callDocRef, async (snapshot: any) => {
+      const data = snapshot.data();
+
+      // Handle incoming answers (for the caller)
+      if (isCaller && pc.current && data?.answer) {
+        const remoteDesc = pc.current.currentRemoteDescription;
+        if (!remoteDesc || remoteDesc.sdp !== data.answer.sdp) {
+          console.log("Received answer, setting remote description.");
+          const answerDescription = new RTCSessionDescription(data.answer);
+          await pc.current.setRemoteDescription(answerDescription);
+        }
+      }
+
+      // Handle incoming offers (for the callee during re-negotiation)
+      if (!isCaller && pc.current && data?.offer) {
+        const remoteDesc = pc.current.currentRemoteDescription;
+        if (!remoteDesc || remoteDesc.sdp !== data.offer.sdp) {
+          console.log("Received new offer, creating answer.");
+          await pc.current.setRemoteDescription(
+            new RTCSessionDescription(data.offer)
+          );
+          const answer = await pc.current.createAnswer();
+          await pc.current.setLocalDescription(answer);
+          if (pc.current.localDescription) {
+            await updateDoc(callDocRef, {
+              answer: pc.current.localDescription.toJSON(),
+            });
+          }
+        }
+      }
+    });
+    signalingUnsubscribers.current.push(mainUnsubscriber);
+  };
+
+  /**
    * Initializes the RTCPeerConnection object for a new call.
    */
   const initializePeerConnection = () => {
     const newPc = new RTCPeerConnection(servers);
 
-    // Add local camera tracks
     if (localCamStreamRef.current) {
       localCamStreamRef.current.getTracks().forEach((track) => {
         newPc.addTrack(track, localCamStreamRef.current!);
       });
     }
 
-    // Handles incoming tracks from the remote peer
     newPc.ontrack = (event) => {
+      console.log("Received remote track:", event.track);
       const stream = event.streams[0] || new MediaStream([event.track]);
       if (event.track.kind === "video") {
         const settings = event.track.getSettings();
@@ -116,14 +153,15 @@ function App() {
     };
 
     newPc.onconnectionstatechange = () => {
+      console.log("Connection state:", newPc.connectionState);
       if (newPc.connectionState === "connected") {
         setCallStatus("connected");
       }
     };
 
-    // Handles re-negotiation automatically
     newPc.onnegotiationneeded = async () => {
       if (newPc.signalingState !== "stable" || !callId) return;
+      console.log("Negotiation needed, creating new offer.");
       try {
         const offer = await newPc.createOffer();
         await newPc.setLocalDescription(offer);
@@ -146,58 +184,40 @@ function App() {
    */
   const handleCreateCall = async () => {
     if (!localCamStream) return alert("Please start your webcam first!");
-
     setCallStatus("creating");
     const callDocRef = await addDoc(collection(db, "calls"), {});
     const newCallId = callDocRef.id;
     setCallId(newCallId);
 
     initializePeerConnection();
-
     if (!pc.current) return console.error("Peer connection not created");
 
     const offerCandidatesCol = collection(callDocRef, "offerCandidates");
     const answerCandidatesCol = collection(callDocRef, "answerCandidates");
 
     pc.current.onicecandidate = (event) => {
-      if (event.candidate) {
-        addDoc(offerCandidatesCol, event.candidate.toJSON());
-      }
+      if (event.candidate) addDoc(offerCandidatesCol, event.candidate.toJSON());
     };
 
-    // Create initial offer
     const offerDescription = await pc.current.createOffer();
     await pc.current.setLocalDescription(offerDescription);
-
-    const offer = {
-      sdp: offerDescription.sdp,
-      type: offerDescription.type,
-    };
+    const offer = { sdp: offerDescription.sdp, type: offerDescription.type };
     await setDoc(callDocRef, { offer });
 
     setCallStatus("waiting");
+    setupSignalingListeners(callDocRef, true); // Caller listens for answers
 
-    // Listen for the answer and remote ICE candidates
-    unsubscribeCall.current = onSnapshot(callDocRef, (snapshot) => {
-      const data = snapshot.data();
-      // This now correctly handles new answers during re-negotiation
-      if (pc.current && data?.answer) {
-        const remoteDesc = pc.current.currentRemoteDescription;
-        if (!remoteDesc || remoteDesc.sdp !== data.answer.sdp) {
-          const answerDescription = new RTCSessionDescription(data.answer);
-          pc.current.setRemoteDescription(answerDescription);
-        }
+    const unsubCandidates = onSnapshot(
+      query(answerCandidatesCol),
+      (snapshot) => {
+        snapshot.docChanges().forEach((change) => {
+          if (change.type === "added") {
+            pc.current?.addIceCandidate(new RTCIceCandidate(change.doc.data()));
+          }
+        });
       }
-    });
-
-    onSnapshot(answerCandidatesCol, (snapshot) => {
-      snapshot.docChanges().forEach((change) => {
-        if (change.type === "added") {
-          const candidate = new RTCIceCandidate(change.doc.data());
-          pc.current?.addIceCandidate(candidate);
-        }
-      });
-    });
+    );
+    signalingUnsubscribers.current.push(unsubCandidates);
   };
 
   /**
@@ -209,63 +229,43 @@ function App() {
 
     setCallId(joiningCallId);
     setCallStatus("creating");
-
     const callDocRef = doc(db, "calls", joiningCallId);
     const callDocSnap = await getDoc(callDocRef);
     if (!callDocSnap.exists()) return alert("Call ID not found.");
 
     initializePeerConnection();
-
     if (!pc.current) return console.error("Peer connection not created");
 
     const offerCandidatesCol = collection(callDocRef, "offerCandidates");
     const answerCandidatesCol = collection(callDocRef, "answerCandidates");
 
     pc.current.onicecandidate = (event) => {
-      if (event.candidate) {
+      if (event.candidate)
         addDoc(answerCandidatesCol, event.candidate.toJSON());
-      }
     };
 
     const offerDescription = callDocSnap.data().offer;
     await pc.current.setRemoteDescription(
       new RTCSessionDescription(offerDescription)
     );
-
     const answerDescription = await pc.current.createAnswer();
     await pc.current.setLocalDescription(answerDescription);
-
-    const answer = {
-      type: answerDescription.type,
-      sdp: answerDescription.sdp,
-    };
+    const answer = { type: answerDescription.type, sdp: answerDescription.sdp };
     await updateDoc(callDocRef, { answer });
 
-    // Listen for re-negotiation offers
-    unsubscribeCall.current = onSnapshot(callDocRef, async (snapshot) => {
-      const data = snapshot.data();
-      if (pc.current && data?.offer && pc.current.signalingState === "stable") {
-        await pc.current.setRemoteDescription(
-          new RTCSessionDescription(data.offer)
-        );
-        const answer = await pc.current.createAnswer();
-        await pc.current.setLocalDescription(answer);
-        if (pc.current.localDescription) {
-          await updateDoc(callDocRef, {
-            answer: pc.current.localDescription.toJSON(),
-          });
-        }
-      }
-    });
+    setupSignalingListeners(callDocRef, false); // Callee listens for offers
 
-    onSnapshot(offerCandidatesCol, (snapshot) => {
-      snapshot.docChanges().forEach((change) => {
-        if (change.type === "added") {
-          let data = change.doc.data();
-          pc.current?.addIceCandidate(new RTCIceCandidate(data));
-        }
-      });
-    });
+    const unsubCandidates = onSnapshot(
+      query(offerCandidatesCol),
+      (snapshot) => {
+        snapshot.docChanges().forEach((change) => {
+          if (change.type === "added") {
+            pc.current?.addIceCandidate(new RTCIceCandidate(change.doc.data()));
+          }
+        });
+      }
+    );
+    signalingUnsubscribers.current.push(unsubCandidates);
   };
 
   const hangUp = async () => {
@@ -274,12 +274,12 @@ function App() {
       const callDocRef = doc(db, "calls", callId);
       const batch = writeBatch(db);
       batch.delete(callDocRef);
-      // A more robust solution would be to delete subcollections, but this is fine for a demo
       await batch.commit();
     }
-    if (unsubscribeCall.current) unsubscribeCall.current();
 
-    // Reset all state
+    signalingUnsubscribers.current.forEach((unsub) => unsub());
+    signalingUnsubscribers.current = [];
+
     localCamStreamRef.current?.getTracks().forEach((track) => track.stop());
     localScreenStream?.getTracks().forEach((track) => track.stop());
     setLocalCamStream(null);
@@ -433,7 +433,6 @@ function App() {
         </span>
       </div>
     );
-
     const noRemoteConnectionPlaceholder = !remoteCamStream &&
       !remoteScreenStream && (
         <div
@@ -443,16 +442,12 @@ function App() {
           <p className="text-gray-400">Waiting for connection...</p>
         </div>
       );
-
     let mainVideos = [];
     let smallVideos = [];
-
     if (localScreenVideo) mainVideos.push(localScreenVideo);
     if (remoteScreenVideo) mainVideos.push(remoteScreenVideo);
-
     if (localCamVideo) smallVideos.push(localCamVideo);
     if (remoteCamVideo) smallVideos.push(remoteCamVideo);
-
     if (mainVideos.length === 0) {
       mainVideos = smallVideos;
       smallVideos = [];
@@ -465,7 +460,6 @@ function App() {
           mainVideos.push(noRemoteConnectionPlaceholder);
       }
     }
-
     return (
       <div className="flex flex-col h-full">
         <div
@@ -655,14 +649,11 @@ function App() {
             Now with automated signaling via Firebase!
           </p>
         </header>
-
         <div className="flex-grow min-h-0">{renderVideos()}</div>
-
         <main className="flex-shrink-0 bg-gray-800 p-6 rounded-lg shadow-2xl mt-4">
           {renderUiByStatus()}
         </main>
       </div>
-
       {showEndCallConfirm && (
         <div className="absolute inset-0 bg-black bg-opacity-70 flex justify-center items-center z-10">
           <div className="bg-gray-800 p-8 rounded-lg shadow-xl text-center">
