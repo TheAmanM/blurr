@@ -15,19 +15,13 @@ const Step = ({
   number,
   title,
   children,
-  isSmall = false,
 }: {
   number: number;
   title: string;
   children: React.ReactNode;
-  isSmall?: boolean;
 }) => (
-  <div className={`bg-gray-700 p-4 rounded-lg ${isSmall ? "text-sm" : ""}`}>
-    <h3
-      className={`font-semibold text-teal-300 mb-2 ${
-        isSmall ? "text-base" : "text-lg"
-      }`}
-    >
+  <div className="bg-gray-700 p-4 rounded-lg">
+    <h3 className="text-lg font-semibold text-teal-300 mb-2">
       <span className="bg-teal-500 text-gray-900 rounded-full w-6 h-6 inline-flex items-center justify-center mr-2">
         {number}
       </span>
@@ -58,6 +52,7 @@ function App() {
   const [isVideoOff, setIsVideoOff] = useState(false);
   const [showEndCallConfirm, setShowEndCallConfirm] = useState(false);
   const [isConnectionEstablished, setIsConnectionEstablished] = useState(false);
+  const [isUpdating, setIsUpdating] = useState(false);
 
   // Refs for non-re-rendering objects
   const pc = useRef<RTCPeerConnection | null>(null);
@@ -151,13 +146,14 @@ function App() {
           `[${performance.now().toFixed(2)}ms] Connection established!`
         );
         setIsConnectionEstablished(true);
+        setIsUpdating(false); // Finish update process
         // Clear signaling data once fully connected
         setOfferData("");
         setAnswerData("");
       }
     };
 
-    // **FIX**: Handles re-negotiation when tracks are added/removed
+    // Handles re-negotiation when tracks are added/removed
     newPc.onnegotiationneeded = async () => {
       console.log(`[${performance.now().toFixed(2)}ms] Negotiation needed.`);
       if (newPc.signalingState !== "stable") {
@@ -165,6 +161,7 @@ function App() {
         return;
       }
       try {
+        setIsUpdating(true); // Show the signaling UI for the user initiating
         const offer = await newPc.createOffer();
         await newPc.setLocalDescription(offer);
       } catch (err) {
@@ -206,14 +203,13 @@ function App() {
     }
   };
 
-  // **FIX**: This function now handles both initial joins and re-negotiation offers.
-  const handleOffer = async (offerStr: string) => {
+  const handleJoinCall = async () => {
     if (!localCamStream) return alert("Please start your webcam first!");
-    if (!offerStr.trim()) return alert("Please paste the offer data first.");
+    if (!offerData.trim()) return alert("Please paste the offer data first.");
 
     try {
       const { sdp: offerSdp, candidates: offerCandidates } =
-        JSON.parse(offerStr);
+        JSON.parse(offerData);
 
       if (!pc.current) {
         setCallMode("joining");
@@ -237,14 +233,14 @@ function App() {
     }
   };
 
-  // **FIX**: This function now handles both initial connection and re-negotiation answers.
-  const handleAnswer = async (answerStr: string) => {
-    if (!answerStr.trim()) return alert("Please paste the peer's answer data.");
+  const handleConnect = async () => {
+    if (!answerData.trim())
+      return alert("Please paste the peer's answer data.");
     if (!pc.current) return alert("Peer connection not initialized.");
 
     try {
       const { sdp: answerSdp, candidates: answerCandidates } =
-        JSON.parse(answerStr);
+        JSON.parse(answerData);
       await pc.current.setRemoteDescription(
         new RTCSessionDescription(answerSdp)
       );
@@ -271,6 +267,7 @@ function App() {
     setIsMuted(false);
     setIsVideoOff(false);
     setIsConnectionEstablished(false);
+    setIsUpdating(false);
     localCamStreamRef.current = null;
     screenSenderRef.current = null;
     pc.current = null;
@@ -472,10 +469,20 @@ function App() {
     );
   };
 
-  const renderSignalingUI = () => {
-    // Initial setup UI
-    if (callMode === "idle") {
-      return (
+  const renderSignalingWizard = () => (
+    <>
+      {isUpdating && (
+        <div className="text-center p-2 rounded-lg bg-yellow-900 border border-yellow-400 mb-4">
+          <h3 className="text-yellow-300 font-bold">
+            Connection Update Required
+          </h3>
+          <p className="text-xs text-yellow-200">
+            A user has started/stopped screen sharing. Exchange the data below
+            to see the change.
+          </p>
+        </div>
+      )}
+      {callMode === "idle" && (
         <div className="text-center">
           <button
             onClick={startWebcam}
@@ -501,61 +508,221 @@ function App() {
             </button>
           </div>
         </div>
-      );
-    }
-
-    // Persistent Signaling UI for active calls
-    return (
-      <div className="grid md:grid-cols-2 gap-4 text-sm">
-        <Step
-          number={callMode === "creating" ? 2 : 1}
-          title="Peer's Offer"
-          isSmall
-        >
-          <textarea
-            value={offerData}
-            onChange={(e) => setOfferData(e.target.value)}
-            placeholder="Paste peer's offer here..."
-            className="w-full h-24 bg-gray-900 p-2 rounded font-mono text-xs"
-          />
+      )}
+      {callMode === "creating" && (
+        <div className="flex flex-col gap-4">
+          <Step number={2} title="Copy & Send Offer">
+            <textarea
+              value={offerData}
+              readOnly
+              className="w-full h-24 bg-gray-900 p-2 rounded font-mono text-xs"
+            />
+            <button
+              onClick={() => copyToClipboard(offerData)}
+              className="mt-2 w-full p-2 bg-gray-600 hover:bg-gray-500 rounded"
+            >
+              Copy Offer
+            </button>
+          </Step>
+          <Step number={3} title="Paste Peer's Answer">
+            <textarea
+              value={answerData}
+              onChange={(e) => setAnswerData(e.target.value)}
+              className="w-full h-24 bg-gray-900 p-2 rounded font-mono text-xs"
+            />
+          </Step>
           <button
-            onClick={() => handleOffer(offerData)}
-            className="mt-2 w-full p-2 bg-teal-600 hover:bg-teal-700 rounded"
+            onClick={handleConnect}
+            className="w-full p-3 bg-green-500 hover:bg-green-600 rounded font-bold text-lg"
           >
-            Create/Send Answer
-          </button>
-        </Step>
-        <Step
-          number={callMode === "creating" ? 3 : 2}
-          title="Peer's Answer"
-          isSmall
-        >
-          <textarea
-            value={answerData}
-            onChange={(e) => setAnswerData(e.target.value)}
-            placeholder="Paste peer's answer here..."
-            className="w-full h-24 bg-gray-900 p-2 rounded font-mono text-xs"
-          />
-          <button
-            onClick={() => handleAnswer(answerData)}
-            className="mt-2 w-full p-2 bg-green-500 hover:bg-green-600 rounded"
-          >
-            Connect
-          </button>
-        </Step>
-        <div className="md:col-span-2 text-center mt-2">
-          <button
-            onClick={() =>
-              copyToClipboard(callMode === "creating" ? offerData : answerData)
-            }
-            className="p-2 bg-gray-600 hover:bg-gray-500 rounded text-xs w-full"
-          >
-            Copy Your {callMode === "creating" ? "Offer" : "Answer"} to Send
+            4. Connect
           </button>
         </div>
-      </div>
-    );
-  };
+      )}
+      {callMode === "joining" && (
+        <div className="flex flex-col gap-4">
+          <Step number={2} title="Paste Peer's Offer">
+            <textarea
+              value={offerData}
+              onChange={(e) => setOfferData(e.target.value)}
+              className="w-full h-24 bg-gray-900 p-2 rounded font-mono text-xs"
+            />
+            <button
+              onClick={handleJoinCall}
+              className="mt-2 w-full p-2 bg-teal-600 hover:bg-teal-700 rounded"
+            >
+              Create Answer from Offer
+            </button>
+          </Step>
+          {answerData && (
+            <Step number={3} title="Copy & Send Your Answer">
+              <textarea
+                value={answerData}
+                readOnly
+                className="w-full h-24 bg-gray-900 p-2 rounded font-mono text-xs"
+              />
+              <button
+                onClick={() => copyToClipboard(answerData)}
+                className="mt-2 w-full p-2 bg-gray-600 hover:bg-gray-500 rounded"
+              >
+                Copy Your Answer
+              </button>
+            </Step>
+          )}
+        </div>
+      )}
+      {callMode !== "idle" && (
+        <div className="text-center mt-6">
+          <button
+            onClick={hangUp}
+            className="px-8 py-3 bg-red-600 hover:bg-red-700 rounded-lg font-semibold"
+          >
+            Cancel
+          </button>
+        </div>
+      )}
+    </>
+  );
+
+  const renderMediaControls = () => (
+    <div className="flex justify-center items-center gap-4 h-full">
+      <button
+        onClick={toggleMic}
+        className={`p-4 rounded-full transition-colors ${
+          isMuted ? "bg-red-600" : "bg-gray-600 hover:bg-gray-500"
+        }`}
+      >
+        {isMuted ? (
+          <svg
+            className="w-6 h-6"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth="2"
+              d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"
+            ></path>
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              d="M5 5l14 14"
+            ></path>
+          </svg>
+        ) : (
+          <svg
+            className="w-6 h-6"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth="2"
+              d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"
+            ></path>
+          </svg>
+        )}
+      </button>
+      <button
+        onClick={toggleVideo}
+        className={`p-4 rounded-full transition-colors ${
+          isVideoOff ? "bg-red-600" : "bg-gray-600 hover:bg-gray-500"
+        }`}
+      >
+        {isVideoOff ? (
+          <svg
+            className="w-6 h-6"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth="2"
+              d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"
+            ></path>
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              d="M1 1l22 22"
+            ></path>
+          </svg>
+        ) : (
+          <svg
+            className="w-6 h-6"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth="2"
+              d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"
+            ></path>
+          </svg>
+        )}
+      </button>
+      <button
+        onClick={toggleScreenShare}
+        className={`p-4 rounded-full transition-colors ${
+          !!localScreenStream ? "bg-blue-500" : "bg-gray-600 hover:bg-gray-500"
+        }`}
+      >
+        <svg
+          className="w-6 h-6"
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
+        >
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth="2"
+            d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"
+          ></path>
+        </svg>
+      </button>
+      <button
+        onClick={() => setIsUpdating(true)}
+        className="p-4 rounded-full bg-yellow-600 hover:bg-yellow-500"
+        title="Process connection update"
+      >
+        <svg
+          className="w-6 h-6"
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth="2"
+            d="M4 4v5h5M20 20v-5h-5M4 4l5 5M20 20l-5-5"
+          ></path>
+        </svg>
+      </button>
+      <button
+        onClick={() => setShowEndCallConfirm(true)}
+        className="p-4 rounded-full bg-red-600 hover:bg-red-700"
+      >
+        <svg className="w-6 h-6" fill="currentColor" viewBox="0 -256 1792 1792">
+          <g transform="matrix(1,0,0,-1,159.45763,1293.0169)">
+            <path
+              d="m 1408,296 q 0,-27 -10,-70.5 Q 1388,182 1377,157 1356,107 1255,51 1161,0 1069,0 1042,0 1016.5,3.5 991,7 959,16 927,25 911.5,30.5 896,36 856,51 816,66 807,69 709,104 632,152 504,231 367.5,367.5 231,504 152,632 104,709 69,807 66,816 51,856 36,896 30.5,911.5 25,927 16,959 7,991 3.5,1016.5 0,1042 0,1069 q 0,92 51,186 56,101 106,122 25,11 68.5,21 43.5,10 70.5,10 14,0 21,-3 18,-6 53,-76 11,-19 30,-54 19,-35 35,-63.5 16,-28.5 31,-53.5 3,-4 17.5,-25 14.5,-21 21.5,-35.5 7,-14.5 7,-28.5 0,-20 -28.5,-50 -28.5,-30 -62,-55 -33.5,-25 -62,-53 -28.5,-28 -28.5,-46 0,-9 5,-22.5 5,-13.5 8.5,-20.5 3.5,-7 14,-24 10.5,-17 11.5,-19 76,-137 174,-235 98,-98 235,-174 2,-1 19,-11.5 17,-10.5 24,-14 7,-3.5 20.5,-8.5 13.5,-5 22.5,-5 18,0 46,28.5 28,28.5 53,62 25,33.5 55,62 30,28.5 50,28.5 14,0 28.5,-7 14.5,-7 35.5,-21.5 21,-14.5 25,-17.5 25,-15 53.5,-31 28.5,-16 63.5,-35 35,-19 54,-30 70,-35 76,-53 3,-7 3,-21 z"
+              style={{ fill: "currentColor" }}
+            />
+          </g>
+        </svg>
+      </button>
+    </div>
+  );
 
   return (
     <div className="bg-gray-900 text-white min-h-screen flex flex-col items-center p-4 font-sans">
@@ -572,145 +739,10 @@ function App() {
 
         <div className="flex-grow min-h-0">{renderVideos()}</div>
 
-        <main className="flex-shrink-0 bg-gray-800 p-6 rounded-lg shadow-2xl mt-4 space-y-4">
-          {callMode !== "idle" && (
-            <div className="flex justify-center items-center gap-4 h-full">
-              <button
-                onClick={toggleMic}
-                className={`p-4 rounded-full transition-colors ${
-                  isMuted ? "bg-red-600" : "bg-gray-600 hover:bg-gray-500"
-                }`}
-              >
-                {isMuted ? (
-                  <svg
-                    className="w-6 h-6"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth="2"
-                      d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"
-                    ></path>
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      d="M5 5l14 14"
-                    ></path>
-                  </svg>
-                ) : (
-                  <svg
-                    className="w-6 h-6"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth="2"
-                      d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"
-                    ></path>
-                  </svg>
-                )}
-              </button>
-              <button
-                onClick={toggleVideo}
-                className={`p-4 rounded-full transition-colors ${
-                  isVideoOff ? "bg-red-600" : "bg-gray-600 hover:bg-gray-500"
-                }`}
-              >
-                {isVideoOff ? (
-                  <svg
-                    className="w-6 h-6"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth="2"
-                      d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"
-                    ></path>
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      d="M1 1l22 22"
-                    ></path>
-                  </svg>
-                ) : (
-                  <svg
-                    className="w-6 h-6"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth="2"
-                      d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"
-                    ></path>
-                  </svg>
-                )}
-              </button>
-              <button
-                onClick={toggleScreenShare}
-                className={`p-4 rounded-full transition-colors ${
-                  !!localScreenStream
-                    ? "bg-blue-500"
-                    : "bg-gray-600 hover:bg-gray-500"
-                }`}
-              >
-                <svg
-                  className="w-6 h-6"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth="2"
-                    d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"
-                  ></path>
-                </svg>
-              </button>
-              <button
-                onClick={() => setShowEndCallConfirm(true)}
-                className="p-4 rounded-full bg-red-600 hover:bg-red-700"
-              >
-                <svg
-                  className="w-6 h-6"
-                  fill="currentColor"
-                  viewBox="0 -256 1792 1792"
-                >
-                  <g transform="matrix(1,0,0,-1,159.45763,1293.0169)">
-                    <path
-                      d="m 1408,296 q 0,-27 -10,-70.5 Q 1388,182 1377,157 1356,107 1255,51 1161,0 1069,0 1042,0 1016.5,3.5 991,7 959,16 927,25 911.5,30.5 896,36 856,51 816,66 807,69 709,104 632,152 504,231 367.5,367.5 231,504 152,632 104,709 69,807 66,816 51,856 36,896 30.5,911.5 25,927 16,959 7,991 3.5,1016.5 0,1042 0,1069 q 0,92 51,186 56,101 106,122 25,11 68.5,21 43.5,10 70.5,10 14,0 21,-3 18,-6 53,-76 11,-19 30,-54 19,-35 35,-63.5 16,-28.5 31,-53.5 3,-4 17.5,-25 14.5,-21 21.5,-35.5 7,-14.5 7,-28.5 0,-20 -28.5,-50 -28.5,-30 -62,-55 -33.5,-25 -62,-53 -28.5,-28 -28.5,-46 0,-9 5,-22.5 5,-13.5 8.5,-20.5 3.5,-7 14,-24 10.5,-17 11.5,-19 76,-137 174,-235 98,-98 235,-174 2,-1 19,-11.5 17,-10.5 24,-14 7,-3.5 20.5,-8.5 13.5,-5 22.5,-5 18,0 46,28.5 28,28.5 53,62 25,33.5 55,62 30,28.5 50,28.5 14,0 28.5,-7 14.5,-7 35.5,-21.5 21,-14.5 25,-17.5 25,-15 53.5,-31 28.5,-16 63.5,-35 35,-19 54,-30 70,-35 76,-53 3,-7 3,-21 z"
-                      style={{ fill: "currentColor" }}
-                    />
-                  </g>
-                </svg>
-              </button>
-            </div>
-          )}
-
-          {renderSignalingUI()}
-
-          {callMode !== "idle" && (
-            <div className="text-center">
-              <button
-                onClick={hangUp}
-                className="px-8 py-2 bg-red-800 hover:bg-red-700 rounded-lg font-semibold text-sm"
-              >
-                Cancel / End Call
-              </button>
-            </div>
-          )}
+        <main className="flex-shrink-0 bg-gray-800 p-6 rounded-lg shadow-2xl mt-4">
+          {!isConnectionEstablished || isUpdating
+            ? renderSignalingWizard()
+            : renderMediaControls()}
         </main>
       </div>
 
