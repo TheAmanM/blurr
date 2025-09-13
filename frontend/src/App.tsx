@@ -16,12 +16,12 @@ import {
 // --- Firebase Configuration ---
 // NOTE: Replace with your actual Firebase config
 const firebaseConfig = {
-  apiKey: "AIzaSyArARWzLc0uqm0H3KkJruzdfERVYg5Y9Vo",
-  authDomain: "web-rtc-demo-82f99.firebaseapp.com",
-  projectId: "web-rtc-demo-82f99",
-  storageBucket: "web-rtc-demo-82f99.firebasestorage.app",
-  messagingSenderId: "352901358662",
-  appId: "1:352901358662:web:b06fc24a7e4360b0d49647",
+  apiKey: "AIzaSyB9cXojIKf2SsXjb69UedLHPipy7x6f-S8",
+  authDomain: "web-rtc-demo-95be5.firebaseapp.com",
+  projectId: "web-rtc-demo-95be5",
+  storageBucket: "web-rtc-demo-95be5.firebasestorage.app",
+  messagingSenderId: "61059022514",
+  appId: "1:61059022514:web:6b338e9a51166ec0d793ab",
 };
 
 // Initialize Firebase
@@ -93,28 +93,21 @@ function App() {
   /**
    * Sets up a universal listener for signaling messages (offers/answers) from Firestore.
    */
-  const setupSignalingListeners = (callDocRef: any, isCaller: boolean) => {
+  const setupSignalingListeners = (callDocRef: any) => {
     const mainUnsubscriber = onSnapshot(callDocRef, async (snapshot: any) => {
       const data = snapshot.data();
+      if (!pc.current) return;
 
-      // Handle incoming answers (for the caller)
-      if (isCaller && pc.current && data?.answer) {
-        const remoteDesc = pc.current.currentRemoteDescription;
-        if (!remoteDesc || remoteDesc.sdp !== data.answer.sdp) {
-          console.log("Received answer, setting remote description.");
-          const answerDescription = new RTCSessionDescription(data.answer);
-          await pc.current.setRemoteDescription(answerDescription);
-        }
-      }
+      // Handle incoming offers. An offer is an intention to start/change a call.
+      if (data?.offer && pc.current.signalingState !== "have-local-offer") {
+        const offerDescription = new RTCSessionDescription(data.offer);
+        const isNewOffer =
+          !pc.current.currentRemoteDescription ||
+          pc.current.currentRemoteDescription.sdp !== offerDescription.sdp;
 
-      // Handle incoming offers (for the callee during re-negotiation)
-      if (!isCaller && pc.current && data?.offer) {
-        const remoteDesc = pc.current.currentRemoteDescription;
-        if (!remoteDesc || remoteDesc.sdp !== data.offer.sdp) {
+        if (isNewOffer) {
           console.log("Received new offer, creating answer.");
-          await pc.current.setRemoteDescription(
-            new RTCSessionDescription(data.offer)
-          );
+          await pc.current.setRemoteDescription(offerDescription);
           const answer = await pc.current.createAnswer();
           await pc.current.setLocalDescription(answer);
           if (pc.current.localDescription) {
@@ -123,6 +116,13 @@ function App() {
             });
           }
         }
+      }
+
+      // Handle incoming answers. An answer is a response to an offer we sent.
+      if (data?.answer && pc.current.signalingState === "have-local-offer") {
+        console.log("Received answer, setting remote description.");
+        const answerDescription = new RTCSessionDescription(data.answer);
+        await pc.current.setRemoteDescription(answerDescription);
       }
     });
     signalingUnsubscribers.current.push(mainUnsubscriber);
@@ -205,7 +205,7 @@ function App() {
     await setDoc(callDocRef, { offer });
 
     setCallStatus("waiting");
-    setupSignalingListeners(callDocRef, true); // Caller listens for answers
+    setupSignalingListeners(callDocRef);
 
     const unsubCandidates = onSnapshot(
       query(answerCandidatesCol),
@@ -244,6 +244,8 @@ function App() {
         addDoc(answerCandidatesCol, event.candidate.toJSON());
     };
 
+    setupSignalingListeners(callDocRef);
+
     const offerDescription = callDocSnap.data().offer;
     await pc.current.setRemoteDescription(
       new RTCSessionDescription(offerDescription)
@@ -252,8 +254,6 @@ function App() {
     await pc.current.setLocalDescription(answerDescription);
     const answer = { type: answerDescription.type, sdp: answerDescription.sdp };
     await updateDoc(callDocRef, { answer });
-
-    setupSignalingListeners(callDocRef, false); // Callee listens for offers
 
     const unsubCandidates = onSnapshot(
       query(offerCandidatesCol),
