@@ -38,6 +38,10 @@ function App() {
   const [callMode, setCallMode] = useState<"idle" | "creating" | "joining">(
     "idle"
   );
+  const [isMuted, setIsMuted] = useState(false);
+  const [isVideoOff, setIsVideoOff] = useState(false);
+  const [showEndCallConfirm, setShowEndCallConfirm] = useState(false);
+  const [isConnectionEstablished, setIsConnectionEstablished] = useState(false);
 
   // useRef for mutable objects that don't trigger re-renders
   const pc = useRef<RTCPeerConnection | null>(null);
@@ -47,7 +51,6 @@ function App() {
   // Textarea state for manual signaling
   const [offerData, setOfferData] = useState("");
   const [answerData, setAnswerData] = useState("");
-  const [remoteCandidates, setRemoteCandidates] = useState("");
 
   /**
    * Initializes the webcam and microphone stream.
@@ -103,6 +106,21 @@ function App() {
       setRemoteStream(event.streams[0]);
     };
 
+    // **FIX**: Use connection state to determine when the call is truly established
+    newPc.onconnectionstatechange = () => {
+      console.log(
+        `[${performance.now().toFixed(2)}ms] Connection state changed: ${
+          newPc.connectionState
+        }`
+      );
+      if (newPc.connectionState === "connected") {
+        console.log(
+          `[${performance.now().toFixed(2)}ms] Connection established!`
+        );
+        setIsConnectionEstablished(true);
+      }
+    };
+
     // Collect ICE candidates and combine them into a single string
     let candidates: RTCIceCandidateInit[] = [];
     newPc.onicecandidate = (event) => {
@@ -129,7 +147,6 @@ function App() {
         const sdp = newPc.localDescription;
         if (sdp) {
           const data = { sdp, candidates };
-          // BUG FIX: Differentiate between setting offer and answer data based on SDP type
           if (sdp.type === "offer") {
             console.log(
               `[${performance.now().toFixed(2)}ms] Setting offer data.`
@@ -211,7 +228,6 @@ function App() {
           } remote ICE candidates...`
         );
 
-        // Add candidates from the offer
         for (const candidate of offerCandidates) {
           await pc.current.addIceCandidate(new RTCIceCandidate(candidate));
         }
@@ -293,7 +309,28 @@ function App() {
     setCallMode("idle");
     setOfferData("");
     setAnswerData("");
-    setRemoteCandidates("");
+    setShowEndCallConfirm(false);
+    setIsMuted(false);
+    setIsVideoOff(false);
+    setIsConnectionEstablished(false);
+  };
+
+  const toggleMic = () => {
+    if (localStream) {
+      localStream.getAudioTracks().forEach((track) => {
+        track.enabled = !track.enabled;
+      });
+      setIsMuted((prev) => !prev);
+    }
+  };
+
+  const toggleVideo = () => {
+    if (localStream) {
+      localStream.getVideoTracks().forEach((track) => {
+        track.enabled = !track.enabled;
+      });
+      setIsVideoOff((prev) => !prev);
+    }
   };
 
   // Effect to attach the remote stream to the video element
@@ -351,124 +388,274 @@ function App() {
           </div>
         </div>
 
-        <main className="bg-gray-800 p-6 rounded-lg shadow-2xl">
-          {/* Initial State: Start webcam and choose mode */}
-          {callMode === "idle" && (
-            <div className="text-center">
-              <button
-                onClick={startWebcam}
-                disabled={!!localStream}
-                className="px-6 py-3 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 rounded-lg font-semibold transition-colors duration-300 mb-4"
-              >
-                1. Start Webcam
-              </button>
-              <div className="flex justify-center gap-4">
-                <button
-                  onClick={handleCreateCall}
-                  disabled={!localStream}
-                  className="px-6 py-3 bg-green-600 hover:bg-green-700 disabled:bg-gray-600 rounded-lg font-semibold"
-                >
-                  Create Call
-                </button>
-                <button
-                  onClick={() => setCallMode("joining")}
-                  disabled={!localStream}
-                  className="px-6 py-3 bg-teal-600 hover:bg-teal-700 disabled:bg-gray-600 rounded-lg font-semibold"
-                >
-                  Join Call
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* Creating a Call Workflow */}
-          {callMode === "creating" && (
-            <div className="flex flex-col gap-4">
-              <Step number={2} title="Copy & Send Offer">
-                <p className="text-sm text-gray-400 mb-2">
-                  Send this entire block of text to the other person.
-                </p>
-                <textarea
-                  value={offerData}
-                  readOnly
-                  className="w-full h-32 bg-gray-900 p-2 rounded font-mono text-xs"
-                ></textarea>
-                <button
-                  onClick={() => copyToClipboard(offerData)}
-                  className="mt-2 w-full p-2 bg-gray-600 hover:bg-gray-500 rounded"
-                >
-                  Copy Offer
-                </button>
-              </Step>
-              <Step number={3} title="Paste Peer's Answer">
-                <p className="text-sm text-gray-400 mb-2">
-                  Once they send their answer back, paste it here.
-                </p>
-                <textarea
-                  value={answerData}
-                  onChange={(e) => setAnswerData(e.target.value)}
-                  className="w-full h-32 bg-gray-900 p-2 rounded font-mono text-xs"
-                ></textarea>
-              </Step>
-              <button
-                onClick={handleConnect}
-                className="w-full p-3 bg-green-500 hover:bg-green-600 rounded font-bold text-lg"
-              >
-                4. Connect
-              </button>
-            </div>
-          )}
-
-          {/* Joining a Call Workflow */}
-          {callMode === "joining" && (
-            <div className="flex flex-col gap-4">
-              <Step number={2} title="Paste Peer's Offer">
-                <textarea
-                  value={offerData}
-                  onChange={(e) => setOfferData(e.target.value)}
-                  className="w-full h-32 bg-gray-900 p-2 rounded font-mono text-xs"
-                ></textarea>
-                <button
-                  onClick={handleJoinCall}
-                  className="mt-2 w-full p-2 bg-teal-600 hover:bg-teal-700 rounded"
-                >
-                  Create Answer from Offer
-                </button>
-              </Step>
-              {answerData && (
-                <Step number={3} title="Copy & Send Your Answer">
-                  <p className="text-sm text-gray-400 mb-2">
-                    Send this back to the person who created the call.
-                  </p>
-                  <textarea
-                    value={answerData}
-                    readOnly
-                    className="w-full h-32 bg-gray-900 p-2 rounded font-mono text-xs"
-                  ></textarea>
+        <main className="bg-gray-800 p-6 rounded-lg shadow-2xl min-h-[280px]">
+          {!isConnectionEstablished ? (
+            <>
+              {/* Initial State: Start webcam and choose mode */}
+              {callMode === "idle" && (
+                <div className="text-center">
                   <button
-                    onClick={() => copyToClipboard(answerData)}
-                    className="mt-2 w-full p-2 bg-gray-600 hover:bg-gray-500 rounded"
+                    onClick={startWebcam}
+                    disabled={!!localStream}
+                    className="px-6 py-3 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 rounded-lg font-semibold transition-colors duration-300 mb-4"
                   >
-                    Copy Your Answer
+                    1. Start Webcam
                   </button>
-                </Step>
+                  <div className="flex justify-center gap-4">
+                    <button
+                      onClick={handleCreateCall}
+                      disabled={!localStream}
+                      className="px-6 py-3 bg-green-600 hover:bg-green-700 disabled:bg-gray-600 rounded-lg font-semibold"
+                    >
+                      Create Call
+                    </button>
+                    <button
+                      onClick={() => setCallMode("joining")}
+                      disabled={!localStream}
+                      className="px-6 py-3 bg-teal-600 hover:bg-teal-700 disabled:bg-gray-600 rounded-lg font-semibold"
+                    >
+                      Join Call
+                    </button>
+                  </div>
+                </div>
               )}
-            </div>
-          )}
 
-          {/* Hangup Button visible during call */}
-          {callMode !== "idle" && (
-            <div className="text-center mt-6">
+              {/* Creating a Call Workflow */}
+              {callMode === "creating" && (
+                <div className="flex flex-col gap-4">
+                  <Step number={2} title="Copy & Send Offer">
+                    <p className="text-sm text-gray-400 mb-2">
+                      Send this entire block of text to the other person.
+                    </p>
+                    <textarea
+                      value={offerData}
+                      readOnly
+                      className="w-full h-32 bg-gray-900 p-2 rounded font-mono text-xs"
+                    ></textarea>
+                    <button
+                      onClick={() => copyToClipboard(offerData)}
+                      className="mt-2 w-full p-2 bg-gray-600 hover:bg-gray-500 rounded"
+                    >
+                      Copy Offer
+                    </button>
+                  </Step>
+                  <Step number={3} title="Paste Peer's Answer">
+                    <p className="text-sm text-gray-400 mb-2">
+                      Once they send their answer back, paste it here.
+                    </p>
+                    <textarea
+                      value={answerData}
+                      onChange={(e) => setAnswerData(e.target.value)}
+                      className="w-full h-32 bg-gray-900 p-2 rounded font-mono text-xs"
+                    ></textarea>
+                  </Step>
+                  <button
+                    onClick={handleConnect}
+                    className="w-full p-3 bg-green-500 hover:bg-green-600 rounded font-bold text-lg"
+                  >
+                    4. Connect
+                  </button>
+                </div>
+              )}
+
+              {/* Joining a Call Workflow */}
+              {callMode === "joining" && (
+                <div className="flex flex-col gap-4">
+                  <Step number={2} title="Paste Peer's Offer">
+                    <textarea
+                      value={offerData}
+                      onChange={(e) => setOfferData(e.target.value)}
+                      className="w-full h-32 bg-gray-900 p-2 rounded font-mono text-xs"
+                    ></textarea>
+                    <button
+                      onClick={handleJoinCall}
+                      className="mt-2 w-full p-2 bg-teal-600 hover:bg-teal-700 rounded"
+                    >
+                      Create Answer from Offer
+                    </button>
+                  </Step>
+                  {answerData && (
+                    <Step number={3} title="Copy & Send Your Answer">
+                      <p className="text-sm text-gray-400 mb-2">
+                        Send this back to the person who created the call.
+                      </p>
+                      <textarea
+                        value={answerData}
+                        readOnly
+                        className="w-full h-32 bg-gray-900 p-2 rounded font-mono text-xs"
+                      ></textarea>
+                      <button
+                        onClick={() => copyToClipboard(answerData)}
+                        className="mt-2 w-full p-2 bg-gray-600 hover:bg-gray-500 rounded"
+                      >
+                        Copy Your Answer
+                      </button>
+                    </Step>
+                  )}
+                </div>
+              )}
+
+              {/* Hangup Button visible during call setup */}
+              {callMode !== "idle" && (
+                <div className="text-center mt-6">
+                  <button
+                    onClick={hangUp}
+                    className="px-8 py-3 bg-red-600 hover:bg-red-700 rounded-lg font-semibold"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              )}
+            </>
+          ) : (
+            <div className="flex justify-center items-center gap-4 h-full">
+              {/* In-call controls */}
               <button
-                onClick={hangUp}
-                className="px-8 py-3 bg-red-600 hover:bg-red-700 rounded-lg font-semibold"
+                onClick={toggleMic}
+                className={`p-4 rounded-full transition-colors ${
+                  isMuted ? "bg-red-600" : "bg-gray-600 hover:bg-gray-500"
+                }`}
               >
-                Hang Up
+                {isMuted ? (
+                  <svg
+                    className="w-6 h-6"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth="2"
+                      d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"
+                    ></path>
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M5 5l14 14"
+                    ></path>
+                  </svg>
+                ) : (
+                  <svg
+                    className="w-6 h-6"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth="2"
+                      d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"
+                    ></path>
+                  </svg>
+                )}
+              </button>
+              <button
+                onClick={toggleVideo}
+                className={`p-4 rounded-full transition-colors ${
+                  isVideoOff ? "bg-red-600" : "bg-gray-600 hover:bg-gray-500"
+                }`}
+              >
+                {isVideoOff ? (
+                  <svg
+                    className="w-6 h-6"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth="2"
+                      d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"
+                    ></path>
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M1 1l22 22"
+                    ></path>
+                  </svg>
+                ) : (
+                  <svg
+                    className="w-6 h-6"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth="2"
+                      d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"
+                    ></path>
+                  </svg>
+                )}
+              </button>
+              <button
+                disabled
+                className="p-4 rounded-full bg-gray-700 cursor-not-allowed opacity-50"
+              >
+                <svg
+                  className="w-6 h-6"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth="2"
+                    d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"
+                  ></path>
+                </svg>
+              </button>
+              <button
+                onClick={() => setShowEndCallConfirm(true)}
+                className="p-4 rounded-full bg-red-600 hover:bg-red-700"
+              >
+                <svg
+                  className="w-6 h-6"
+                  fill="currentColor"
+                  viewBox="0 0 20 20"
+                >
+                  <path
+                    fillRule="evenodd"
+                    d="M10 3a1 1 0 011 1v1.586l4.707 4.707a1 1 0 01-1.414 1.414L10 6.414 5.707 10.707a1 1 0 11-1.414-1.414L9 4.586V4a1 1 0 011-1z"
+                    clipRule="evenodd"
+                  ></path>
+                  <path d="M3.5 6.5a1 1 0 011-1h11a1 1 0 010 2h-11a1 1 0 01-1-1z"></path>
+                </svg>
               </button>
             </div>
           )}
         </main>
       </div>
+
+      {showEndCallConfirm && (
+        <div className="absolute inset-0 bg-black bg-opacity-70 flex justify-center items-center z-10">
+          <div className="bg-gray-800 p-8 rounded-lg shadow-xl text-center">
+            <h2 className="text-2xl mb-4 font-bold">End Call?</h2>
+            <p className="text-gray-400 mb-6">
+              Are you sure you want to end the call?
+            </p>
+            <div className="flex justify-center gap-4">
+              <button
+                onClick={() => setShowEndCallConfirm(false)}
+                className="px-6 py-2 bg-gray-600 hover:bg-gray-500 rounded-lg font-semibold"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={hangUp}
+                className="px-6 py-2 bg-red-600 hover:bg-red-700 rounded-lg font-semibold"
+              >
+                End Call
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
