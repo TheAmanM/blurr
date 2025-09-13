@@ -1,52 +1,108 @@
-# Privacy Redactor RT Default Configuration
+# Privacy Redactor RT - Default Configuration
+# This file contains all configurable parameters for the real-time privacy redaction system
 
+# Input/Output Configuration
 io:
-  target_width: 1280
-  target_height: 720
-  target_fps: 30
-  letterbox: true
+  target_width: 1280          # Target frame width (pixels)
+  target_height: 720          # Target frame height (pixels)
+  target_fps: 30              # Target frames per second
+  letterbox: true             # Use letterboxing to preserve aspect ratio
+  letterbox_color: [0, 0, 0]  # RGB color for letterbox bars
 
+# Real-time Processing Configuration
 realtime:
-  detector_stride: 3
-  ocr_refresh_stride: 10
-  max_parallel_ocr: 1
-  max_queue: 2
+  detector_stride: 3                    # Run text detection every N frames
+  ocr_refresh_stride: 10               # Force OCR refresh every N frames
+  max_parallel_ocr: 1                  # Maximum parallel OCR workers
+  max_queue: 2                         # Maximum OCR queue size
+  backpressure_threshold_ms: 120.0     # Latency threshold for backpressure (ms)
+  min_fps_threshold: 24                # Minimum FPS before frame dropping
 
+# Text Detection Configuration
 detection:
-  min_text_confidence: 0.6
-  bbox_inflate_px: 6
-  min_box_size: [10, 10]
+  min_text_confidence: 0.6      # Minimum confidence for text detection
+  bbox_inflate_px: 6            # Pixels to inflate bounding boxes
+  min_box_size: [10, 10]        # Minimum bounding box size [width, height]
+  max_box_size: [800, 600]      # Maximum bounding box size [width, height]
+  use_gpu: false                # Use GPU for text detection (requires CUDA)
+  det_db_thresh: 0.3            # DB detection threshold
+  det_db_box_thresh: 0.6        # DB box threshold
 
+# OCR Configuration
 ocr:
-  confidence_threshold: 0.7
-  max_queue_size: 5
-  timeout_seconds: 2.0
+  min_ocr_confidence: 0.7       # Minimum confidence for OCR results
+  use_gpu: false                # Use GPU for OCR (requires CUDA)
+  rec_batch_num: 6              # OCR batch size
+  max_text_length: 100          # Maximum text length to process
+  enable_mkldnn: true           # Enable Intel MKL-DNN optimization
+  cpu_threads: 4                # Number of CPU threads for OCR
 
+# Classification Configuration
 classification:
-  require_temporal_consensus: 2
-  categories:
+  require_temporal_consensus: 2           # Frames required for consensus
+  categories:                             # Enabled detection categories
     - phone
     - credit_card
     - email
     - address
     - api_key
-  entropy_threshold_bits_per_char: 3.5
+  entropy_threshold_bits_per_char: 3.5    # Entropy threshold for API keys
+  min_phone_digits: 10                    # Minimum digits for phone numbers
+  min_credit_card_digits: 13              # Minimum digits for credit cards
+  address_min_score: 0.6                  # Minimum score for address detection
+  use_spacy_ner: false                    # Use spaCy NER for addresses
+  spacy_model: "en_core_web_sm"           # spaCy model name
 
+# Tracking Configuration
 tracking:
-  iou_threshold: 0.5
-  max_age: 30
-  min_hits: 3
-  smoothing_window: 5
+  iou_threshold: 0.5            # IoU threshold for track association
+  max_age: 30                   # Maximum frames to keep inactive tracks
+  min_hits: 3                   # Minimum hits before track confirmation
+  smoothing_factor: 0.3         # Bounding box smoothing factor (0=no smoothing)
+  max_flow_error: 50.0          # Maximum optical flow error
+  flow_quality_level: 0.01      # Corner detection quality level
+  flow_min_distance: 10         # Minimum distance between flow points
+  flow_block_size: 3            # Block size for corner detection
 
+# Redaction Configuration
 redaction:
-  default_method: gaussian
-  gaussian_kernel_size: 15
-  pixelate_block_size: 8
-  solid_color: [0, 0, 0]
-  per_category_methods: {}
+  default_method: "gaussian"              # Default redaction method
+  gaussian_kernel_size: 15                # Gaussian blur kernel size (must be odd)
+  gaussian_sigma: 5.0                     # Gaussian blur sigma
+  pixelate_block_size: 8                  # Pixelation block size
+  solid_color: [0, 0, 0]                  # RGB color for solid redaction
+  category_methods: {}                    # Per-category redaction methods
+  inflate_bbox_px: 2                      # Additional bbox inflation for redaction
 
+# Recording Configuration
+recording:
+  enabled: false                          # Enable video recording
+  output_dir: "recordings"                # Output directory for recordings
+  filename_template: "redacted_{timestamp}.mp4"  # Filename template
+  codec: "libx264"                        # Video codec
+  crf: 23                                 # Constant Rate Factor (0-51, lower=better)
+  preset: "medium"                        # Encoding preset (speed vs compression)
+  audio_codec: "aac"                      # Audio codec
+  audio_bitrate: "128k"                   # Audio bitrate
+  constant_framerate: true                # Use constant frame rate
+
+# Logging Configuration
 logging:
-  enable_audit_log: true
-  log_text_previews: true
-  mask_characters: true
-  log_file_path: "detections.jsonl"
+  enabled: true                           # Enable logging
+  log_level: "INFO"                       # Log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+  log_file: null                          # Log file path (null = console only)
+  audit_detections: false                 # Enable detection audit logging
+  audit_file: null                        # Audit log file path
+  log_text_previews: true                 # Include text previews in logs
+  max_preview_length: 50                  # Maximum preview text length
+  mask_text: true                         # Mask sensitive text in logs
+  mask_chars_visible: 3                   # Number of visible characters when masking
+
+# Performance Configuration
+performance:
+  enable_profiling: false                 # Enable performance profiling
+  stats_window_size: 30                   # Statistics window size (frames)
+  memory_limit_mb: null                   # Memory limit in MB (null = no limit)
+  auto_quality_scaling: true              # Automatically scale quality for performance
+  quality_scale_factor: 0.8               # Quality scaling factor
+  enable_memory_pooling: true             # Enable memory pooling for arrays

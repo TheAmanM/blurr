@@ -24,37 +24,21 @@ classifiers = [
 ]
 
 dependencies = [
-    # Core framework
-    "streamlit==1.28.1",
-    "streamlit-webrtc==0.47.1",
-    
-    # Computer vision and OCR
-    "opencv-python==4.8.1.78",
-    "paddlepaddle==2.5.2",
-    "paddleocr==2.7.3",
-    
-    # Image processing
-    "numpy==1.24.3",
-    "pillow==10.0.1",
+    # Core dependencies for CLI
+    "typer>=0.12.0",
+    "rich>=13.6.0",
     
     # Configuration and validation
-    "pydantic==2.4.2",
-    "pyyaml==6.0.1",
+    "pydantic>=2.4.0",
+    "pyyaml>=6.0.0",
+    
+    # Image processing (minimal versions)
+    "numpy>=1.26.0",
+    "opencv-python>=4.5.0",
+    "pillow>=10.0.0",
     
     # Phone number validation
-    "phonenumbers==8.13.23",
-    
-    # Optional NLP for address detection
-    "spacy==3.7.2",
-    
-    # CLI interface
-    "typer==0.9.0",
-    
-    # Video processing
-    "av==10.0.0",
-    
-    # Logging and utilities
-    "loguru==0.7.2",
+    "phonenumbers>=8.13.0",
 ]
 
 [project.optional-dependencies]
@@ -74,9 +58,43 @@ dev = [
     "pre-commit==3.5.0",
 ]
 
+# Web interface dependencies
+streamlit = [
+    "streamlit>=1.28.0",
+    "streamlit-webrtc>=0.47.0",
+]
+
+gradio = [
+    "gradio>=4.0.0",
+]
+
+fastapi = [
+    "fastapi>=0.104.0",
+    "uvicorn[standard]>=0.24.0",
+    "websockets>=12.0",
+]
+
+# OCR and ML dependencies
+ml = [
+    "paddlepaddle>=3.0.0",
+    "paddleocr>=3.0.0",
+]
+
+# All web interfaces
+web = [
+    "privacy-redactor-rt[streamlit,gradio,fastapi]",
+]
+
+# Complete installation with all features
+all = [
+    "privacy-redactor-rt[dev,web,ml]",
+]
+
 [project.scripts]
 privacy-redactor-rt = "privacy_redactor_rt.cli:app"
 privacy-redactor-app = "privacy_redactor_rt.app:main"
+privacy-redactor-gradio = "privacy_redactor_rt.gradio_app:main"
+privacy-redactor-fastapi = "privacy_redactor_rt.fastapi_app:main"
 
 [project.urls]
 Homepage = "https://github.com/privacy-redactor/privacy-redactor-rt"
@@ -141,10 +159,6 @@ python_functions = ["test_*"]
 addopts = [
     "--strict-markers",
     "--strict-config",
-    "--cov=privacy_redactor_rt",
-    "--cov-report=term-missing",
-    "--cov-report=html",
-    "--cov-report=xml",
 ]
 
 [tool.coverage.run]
@@ -166,4 +180,9 @@ exclude_lines = [
     "if __name__ == .__main__.:",
     "class .*\\bProtocol\\):",
     "@(abc\\.)?abstractmethod",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=7.4.3",
 ]
