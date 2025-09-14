@@ -94,34 +94,41 @@ function App() {
   /**
    * Sets up a universal listener for signaling messages (offers/answers) from Firestore.
    */
-  const setupSignalingListeners = (callDocRef: any) => {
+  const setupSignalingListeners = (callDocRef: any, isOfferer: boolean) => {
     const mainUnsubscriber = onSnapshot(callDocRef, async (snapshot: any) => {
       const data = snapshot.data();
       if (!pc.current) return;
 
+      // Handle incoming answers (logic is unchanged)
       if (data?.answer && pc.current.signalingState === "have-local-offer") {
         console.log("Received answer, setting remote description.");
         const answerDescription = new RTCSessionDescription(data.answer);
         await pc.current.setRemoteDescription(answerDescription);
       }
 
+      // Handle incoming offers
       if (data?.offer) {
-        const offerDescription = new RTCSessionDescription(data.offer);
-        // This check prevents processing the same offer twice
-        const isNewOffer =
-          pc.current.signalingState === "stable" &&
-          pc.current.currentRemoteDescription?.sdp !== offerDescription.sdp;
+        // This condition is the KEY FIX.
+        // Process the offer only if you are the creator OR if a connection is already established (re-negotiation).
+        const shouldProcessOffer =
+          isOfferer || pc.current.connectionState === "connected";
 
-        if (isNewOffer) {
-          console.log("Received new offer, creating answer.");
-          await pc.current.setRemoteDescription(offerDescription);
-          const answer = await pc.current.createAnswer();
-          await pc.current.setLocalDescription(answer);
-          if (pc.current.localDescription) {
-            await updateDoc(callDocRef, {
-              answer: pc.current.localDescription.toJSON(),
-              offer: deleteField(),
-            });
+        if (shouldProcessOffer) {
+          const offerDescription = new RTCSessionDescription(data.offer);
+          // Further check to prevent processing an offer we've already seen
+          if (
+            pc.current.currentRemoteDescription?.sdp !== offerDescription.sdp
+          ) {
+            console.log("Received new offer, creating answer.");
+            await pc.current.setRemoteDescription(offerDescription);
+            const answer = await pc.current.createAnswer();
+            await pc.current.setLocalDescription(answer);
+            if (pc.current.localDescription) {
+              await updateDoc(callDocRef, {
+                answer: pc.current.localDescription.toJSON(),
+                offer: deleteField(),
+              });
+            }
           }
         }
       }
@@ -223,7 +230,7 @@ function App() {
       if (event.candidate) addDoc(offerCandidatesCol, event.candidate.toJSON());
     };
 
-    setupSignalingListeners(callDocRef);
+    setupSignalingListeners(callDocRef, true);
 
     const offerDescription = await pc.current.createOffer();
     await pc.current.setLocalDescription(offerDescription);
@@ -269,7 +276,7 @@ function App() {
         addDoc(answerCandidatesCol, event.candidate.toJSON());
     };
 
-    setupSignalingListeners(callDocRef);
+    setupSignalingListeners(callDocRef, false);
 
     const offerDescription = callDocSnap.data().offer;
     await pc.current.setRemoteDescription(
