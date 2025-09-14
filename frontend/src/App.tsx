@@ -132,7 +132,10 @@ function App() {
   /**
    * Initializes the RTCPeerConnection object for a new call.
    */
-  const initializePeerConnection = (currentCallId: string) => {
+  const initializePeerConnection = (
+    currentCallId: string,
+    isOfferer: boolean
+  ) => {
     const newPc = new RTCPeerConnection(servers);
 
     if (localCamStreamRef.current) {
@@ -169,16 +172,25 @@ function App() {
     };
 
     newPc.onnegotiationneeded = async () => {
+      // For the joiner, we suppress this event until the initial connection is made.
+      if (!isOfferer && newPc.connectionState !== "connected") {
+        console.log(
+          "Suppressing onnegotiationneeded for joiner during initial setup."
+        );
+        return;
+      }
+
       if (newPc.signalingState !== "stable" || !currentCallId) {
         console.log("Skipping negotiation: Unstable state or no Call ID.");
         return;
       }
+
       console.log("Negotiation needed, creating new offer.");
       try {
         const offer = await newPc.createOffer();
         await newPc.setLocalDescription(offer);
         if (newPc.localDescription) {
-          const callDocRef = doc(db, "calls", currentCallId); // Use the argument here
+          const callDocRef = doc(db, "calls", currentCallId);
           await updateDoc(callDocRef, {
             offer: newPc.localDescription.toJSON(),
           });
@@ -201,7 +213,7 @@ function App() {
     const newCallId = callDocRef.id;
     setCallId(newCallId);
 
-    initializePeerConnection(newCallId);
+    initializePeerConnection(newCallId, true);
     if (!pc.current) return console.error("Peer connection not created");
 
     const offerCandidatesCol = collection(callDocRef, "offerCandidates");
@@ -246,7 +258,7 @@ function App() {
     const callDocSnap = await getDoc(callDocRef);
     if (!callDocSnap.exists()) return alert("Call ID not found.");
 
-    initializePeerConnection(joiningCallId);
+    initializePeerConnection(joiningCallId, false);
     if (!pc.current) return console.error("Peer connection not created");
 
     const offerCandidatesCol = collection(callDocRef, "offerCandidates");
