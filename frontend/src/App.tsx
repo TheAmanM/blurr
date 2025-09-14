@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import { initializeApp } from "firebase/app";
 import {
   getFirestore,
@@ -9,6 +9,7 @@ import {
   getDoc,
   onSnapshot,
   updateDoc,
+  deleteField,
   writeBatch,
   query,
 } from "firebase/firestore";
@@ -98,8 +99,19 @@ function App() {
       const data = snapshot.data();
       if (!pc.current) return;
 
+      // Handle incoming answers. An answer is a response to an offer we sent.
+      if (data?.answer && pc.current.signalingState === "have-local-offer") {
+        console.log("Received answer, setting remote description.");
+        const answerDescription = new RTCSessionDescription(data.answer);
+        await pc.current.setRemoteDescription(answerDescription);
+      }
+
       // Handle incoming offers. An offer is an intention to start/change a call.
-      if (data?.offer && pc.current.signalingState !== "have-local-offer") {
+      if (data?.offer && pc.current.signalingState === "stable") {
+        if (data.offer.sdp === pc.current.localDescription?.sdp) {
+          return;
+        }
+
         const offerDescription = new RTCSessionDescription(data.offer);
         const isNewOffer =
           !pc.current.currentRemoteDescription ||
@@ -113,16 +125,10 @@ function App() {
           if (pc.current.localDescription) {
             await updateDoc(callDocRef, {
               answer: pc.current.localDescription.toJSON(),
+              offer: deleteField(),
             });
           }
         }
-      }
-
-      // Handle incoming answers. An answer is a response to an offer we sent.
-      if (data?.answer && pc.current.signalingState === "have-local-offer") {
-        console.log("Received answer, setting remote description.");
-        const answerDescription = new RTCSessionDescription(data.answer);
-        await pc.current.setRemoteDescription(answerDescription);
       }
     });
     signalingUnsubscribers.current.push(mainUnsubscriber);
@@ -160,7 +166,10 @@ function App() {
     };
 
     newPc.onnegotiationneeded = async () => {
-      if (newPc.signalingState !== "stable" || !callId) return;
+      if (newPc.signalingState !== "stable" || !callId) {
+        console.log("Skipping negotiation:", newPc.signalingState);
+        return;
+      }
       console.log("Negotiation needed, creating new offer.");
       try {
         const offer = await newPc.createOffer();
@@ -199,13 +208,14 @@ function App() {
       if (event.candidate) addDoc(offerCandidatesCol, event.candidate.toJSON());
     };
 
+    setupSignalingListeners(callDocRef);
+
     const offerDescription = await pc.current.createOffer();
     await pc.current.setLocalDescription(offerDescription);
     const offer = { sdp: offerDescription.sdp, type: offerDescription.type };
     await setDoc(callDocRef, { offer });
 
     setCallStatus("waiting");
-    setupSignalingListeners(callDocRef);
 
     const unsubCandidates = onSnapshot(
       query(answerCandidatesCol),
@@ -253,7 +263,7 @@ function App() {
     const answerDescription = await pc.current.createAnswer();
     await pc.current.setLocalDescription(answerDescription);
     const answer = { type: answerDescription.type, sdp: answerDescription.sdp };
-    await updateDoc(callDocRef, { answer });
+    await updateDoc(callDocRef, { answer, offer: deleteField() });
 
     const unsubCandidates = onSnapshot(
       query(offerCandidatesCol),
@@ -502,7 +512,7 @@ function App() {
                 strokeLinecap="round"
                 strokeLinejoin="round"
                 strokeWidth="2"
-                d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"
+                d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 S0 116 0v6a3 3 0 01-3 3z"
               ></path>
               <path
                 strokeLinecap="round"
