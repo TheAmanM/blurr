@@ -140,21 +140,40 @@ function App() {
   const initializePeerConnection = () => {
     const newPc = new RTCPeerConnection(servers);
 
+    // Add local camera and mic tracks to the connection
     if (localCamStreamRef.current) {
       localCamStreamRef.current.getTracks().forEach((track) => {
         newPc.addTrack(track, localCamStreamRef.current!);
       });
     }
 
+    // This is the updated ontrack handler
     newPc.ontrack = (event) => {
       console.log("Received remote track:", event.track);
-      const stream = event.streams[0] || new MediaStream([event.track]);
-      if (event.track.kind === "video") {
-        const settings = event.track.getSettings();
-        if (settings.displaySurface) setRemoteScreenStream(stream);
-        else setRemoteCamStream(stream);
-      } else if (event.track.kind === "audio") {
-        setRemoteCamStream(stream);
+      const track = event.track;
+
+      // Differentiate between a screen share track and a camera/mic track
+      const isScreenTrack =
+        track.kind === "video" && track.getSettings().displaySurface;
+
+      if (isScreenTrack) {
+        // Handle the remote screen share stream
+        setRemoteScreenStream(new MediaStream([track]));
+      } else {
+        // Handle remote camera and microphone tracks by adding them to a single stream
+        setRemoteCamStream((prevStream) => {
+          // If a stream already exists, we'll add to it. Otherwise, create a new one.
+          const newStream = prevStream
+            ? new MediaStream(prevStream.getTracks())
+            : new MediaStream();
+
+          // Add the new track if it's not already in the stream
+          if (!newStream.getTrackById(track.id)) {
+            newStream.addTrack(track);
+          }
+
+          return newStream;
+        });
       }
     };
 
