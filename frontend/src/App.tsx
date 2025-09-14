@@ -108,6 +108,7 @@ function App() {
 
       // Handle incoming offers. An offer is an intention to start/change a call.
       if (data?.offer && pc.current.signalingState === "stable") {
+        console.log("[DEBUG] Received a new offer over Firebase."); // <-- ADD THIS
         if (data.offer.sdp === pc.current.localDescription?.sdp) {
           return;
         }
@@ -149,7 +150,11 @@ function App() {
 
     // This is the updated ontrack handler
     newPc.ontrack = (event) => {
-      console.log("Received remote track:", event.track);
+      console.log(
+        "[DEBUG] ontrack event fired! Received remote track:",
+        event.track.kind,
+        event.track.id
+      ); // <-- MODIFY THIS
       const track = event.track;
 
       // Differentiate between a screen share track and a camera/mic track
@@ -185,11 +190,18 @@ function App() {
     };
 
     newPc.onnegotiationneeded = async () => {
+      console.log(
+        `[DEBUG] onnegotiationneeded fired! Signaling state: ${newPc.signalingState}, Call ID: ${callId}`
+      ); // <-- MODIFY THIS LINE
       if (newPc.signalingState !== "stable" || !callId) {
         console.log("Skipping negotiation:", newPc.signalingState);
+        console.log(
+          "[DEBUG] Skipping negotiation due to unstable state or missing callId."
+        ); // <-- ADD THIS
         return;
       }
       console.log("Negotiation needed, creating new offer.");
+      console.log("[DEBUG] Negotiation needed, creating new offer."); // <-- MODIFY THIS
       try {
         const offer = await newPc.createOffer();
         await newPc.setLocalDescription(offer);
@@ -345,6 +357,12 @@ function App() {
   };
 
   const toggleScreenShare = async () => {
+    if (pc.current?.connectionState !== "connected") {
+      alert(
+        "Please wait for the connection to be fully established before sharing your screen."
+      );
+      return;
+    }
     if (!pc.current) return;
     if (screenSenderRef.current) {
       pc.current.removeTrack(screenSenderRef.current);
@@ -353,14 +371,17 @@ function App() {
       screenSenderRef.current = null;
     } else {
       try {
+        console.log("[DEBUG] User wants to start screen share."); // <-- ADD THIS
         const screenStream = await navigator.mediaDevices.getDisplayMedia({
           video: true,
         });
         const screenTrack = screenStream.getVideoTracks()[0];
+        console.log("[DEBUG] Got screen track:", screenTrack); // <-- ADD THIS
         screenSenderRef.current = pc.current.addTrack(
           screenTrack,
           screenStream
         );
+        console.log("[DEBUG] Added screen track to peer connection."); // <-- ADD THIS
         setLocalScreenStream(screenStream);
         screenTrack.onended = () => {
           if (screenSenderRef.current) toggleScreenShare();
