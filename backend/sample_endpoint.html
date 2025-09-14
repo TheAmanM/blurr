@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebRTC Blur Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            min-height: 100vh;
+        }
+
+        .container {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 15px;
+            padding: 30px;
+            backdrop-filter: blur(10px);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+        }
+
+        h1 {
+            text-align: center;
+            margin-bottom: 30px;
+            font-size: 2.5rem;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.5);
+        }
+
+        .video-container {
+            display: flex;
+            gap: 20px;
+            justify-content: center;
+            flex-wrap: wrap;
+            margin: 20px 0;
+        }
+
+        .video-box {
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 10px;
+            padding: 15px;
+            text-align: center;
+            min-width: 320px;
+        }
+
+        video {
+            width: 320px;
+            height: 240px;
+            border-radius: 8px;
+            background: #000;
+            border: 2px solid rgba(255, 255, 255, 0.3);
+        }
+
+        .video-label {
+            margin-bottom: 10px;
+            font-weight: bold;
+            font-size: 1.1rem;
+        }
+
+        .controls {
+            text-align: center;
+            margin: 30px 0;
+            display: flex;
+            gap: 15px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+
+        button {
+            padding: 12px 24px;
+            font-size: 16px;
+            border: none;
+            border-radius: 25px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-weight: bold;
+            min-width: 120px;
+        }
+
+        #startBtn {
+            background: linear-gradient(45deg, #4CAF50, #45a049);
+            color: white;
+        }
+
+        #stopBtn {
+            background: linear-gradient(45deg, #f44336, #da190b);
+            color: white;
+        }
+
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+        }
+
+        button:disabled {
+            background: #666;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        #status {
+            text-align: center;
+            margin: 20px 0;
+            padding: 15px;
+            border-radius: 8px;
+            background: rgba(0, 0, 0, 0.2);
+            font-weight: bold;
+        }
+
+        .status-connecting { color: #ffd700; }
+        .status-connected { color: #4CAF50; }
+        .status-error { color: #f44336; }
+        .status-disconnected { color: #999; }
+
+        .info {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+            padding: 20px;
+            margin-top: 20px;
+        }
+
+        .info h3 {
+            margin-top: 0;
+            color: #ffd700;
+        }
+
+        .info ul {
+            margin-left: 20px;
+        }
+
+        .info li {
+            margin: 8px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎥 WebRTC Blur Test</h1>
+        
+        <div id="status" class="status-disconnected">
+            Ready to start - Click "Start Camera" to begin
+        </div>
+
+        <div class="controls">
+            <button id="startBtn">🎬 Start Camera</button>
+            <button id="stopBtn" disabled>🛑 Stop</button>
+        </div>
+
+        <div class="video-container">
+            <div class="video-box">
+                <div class="video-label">📹 Original Camera Feed</div>
+                <video id="localVideo" autoplay muted playsinline></video>
+            </div>
+            <div class="video-box">
+                <div class="video-label">🌫️ Blurred Feed (from Server)</div>
+                <video id="remoteVideo" autoplay playsinline></video>
+            </div>
+        </div>
+
+        <div class="info">
+            <h3>ℹ️ How it works:</h3>
+            <ul>
+                <li><strong>Original Feed:</strong> Direct camera input displayed locally</li>
+                <li><strong>Blurred Feed:</strong> Video processed through your FastAPI backend with Gaussian blur</li>
+                <li><strong>Backend URL:</strong> <code>http://localhost:8000/offer</code></li>
+                <li><strong>Processing:</strong> Each frame gets a 51x51 Gaussian blur applied server-side</li>
+            </ul>
+        </div>
+    </div>
+
+    <script>
+        const localVideo = document.getElementById('localVideo');
+        const remoteVideo = document.getElementById('remoteVideo');
+        const startBtn = document.getElementById('startBtn');
+        const stopBtn = document.getElementById('stopBtn');
+        const status = document.getElementById('status');
+
+        let pc = null;
+        let localStream = null;
+
+        function updateStatus(message, className) {
+            status.textContent = message;
+            status.className = `status-${className}`;
+        }
+
+        async function startCall() {
+            try {
+                startBtn.disabled = true;
+                updateStatus('🎥 Accessing camera...', 'connecting');
+
+                // Get user media
+                localStream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { 
+                        width: { ideal: 640 }, 
+                        height: { ideal: 480 } 
+                    }, 
+                    audio: false 
+                });
+                
+                localVideo.srcObject = localStream;
+                updateStatus('📡 Connecting to server...', 'connecting');
+
+                // Create peer connection
+                pc = new RTCPeerConnection({
+                    iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+                });
+
+                // Add local stream to peer connection
+                localStream.getTracks().forEach(track => {
+                    pc.addTrack(track, localStream);
+                });
+
+                // Handle remote stream
+                pc.ontrack = (event) => {
+                    console.log('Received remote track:', event.track.kind);
+                    remoteVideo.srcObject = event.streams[0];
+                    updateStatus('✅ Connected! Blur processing active', 'connected');
+                };
+
+                // Handle connection state changes
+                pc.onconnectionstatechange = () => {
+                    console.log('Connection state:', pc.connectionState);
+                    if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+                        updateStatus('❌ Connection failed', 'error');
+                    }
+                };
+
+                // Create and send offer
+                const offer = await pc.createOffer();
+                await pc.setLocalDescription(offer);
+
+                // Send offer to your FastAPI backend
+                const response = await fetch('http://localhost:8000/offer', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        sdp: offer.sdp,
+                        type: offer.type
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`Server responded with ${response.status}: ${response.statusText}`);
+                }
+
+                const answer = await response.json();
+                await pc.setRemoteDescription(new RTCSessionDescription(answer));
+
+                stopBtn.disabled = false;
+                
+            } catch (error) {
+                console.error('Error starting call:', error);
+                updateStatus(`❌ Error: ${error.message}`, 'error');
+                startBtn.disabled = false;
+                
+                // Clean up on error
+                if (localStream) {
+                    localStream.getTracks().forEach(track => track.stop());
+                    localStream = null;
+                }
+                if (pc) {
+                    pc.close();
+                    pc = null;
+                }
+            }
+        }
+
+        function stopCall() {
+            // Stop local stream
+            if (localStream) {
+                localStream.getTracks().forEach(track => track.stop());
+                localStream = null;
+            }
+
+            // Close peer connection
+            if (pc) {
+                pc.close();
+                pc = null;
+            }
+
+            // Clear video elements
+            localVideo.srcObject = null;
+            remoteVideo.srcObject = null;
+
+            // Update UI
+            startBtn.disabled = false;
+            stopBtn.disabled = true;
+            updateStatus('⏹️ Disconnected', 'disconnected');
+        }
+
+        // Event listeners
+        startBtn.addEventListener('click', startCall);
+        stopBtn.addEventListener('click', stopCall);
+
+        // Handle page unload
+        window.addEventListener('beforeunload', stopCall);
+    </script>
+</body>
+</html>
