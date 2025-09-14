@@ -20,6 +20,7 @@ from .pipeline import RealtimePipeline
 from .video_source import VideoSource
 from .recorder import MP4Recorder
 from .logging_utils import setup_logging
+from .ui_detect import PrivacyUIDetector
 
 
 app = typer.Typer(help="Privacy Redactor RT - Real-time sensitive information detection and redaction")
@@ -452,6 +453,158 @@ def batch_process(
         raise typer.Exit(1)
     except KeyboardInterrupt:
         console.print("\n[yellow]Batch processing interrupted by user[/yellow]")
+        raise typer.Exit(130)
+    except Exception as e:
+        console.print(f"[red]Unexpected error: {e}[/red]")
+        if verbose:
+            console.print_exception()
+        raise typer.Exit(1)
+
+
+@app.command()
+def analyze_privacy_image(
+    input_file: Path = typer.Argument(..., help="Input image file path"),
+    output_file: Optional[Path] = typer.Option(None, "--output", "-o", help="Output image file path (optional)"),
+    show_all: bool = typer.Option(False, "--show-all", help="Show all detected elements, not just enabled ones"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable verbose logging"),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress output except errors"),
+):
+    """Analyze privacy settings in an image and highlight enabled options.
+    
+    This command processes an image of privacy settings (like a settings screen,
+    privacy dashboard, etc.) to detect and highlight enabled privacy options.
+    
+    Examples:
+    
+        # Basic usage - analyze and display results
+        privacy-redactor analyze-privacy-image settings_screenshot.png
+        
+        # Save result to file
+        privacy-redactor analyze-privacy-image settings.png --output result.png
+        
+        # Show all detected elements, not just enabled ones
+        privacy-redactor analyze-privacy-image settings.png --show-all
+    """
+    # Set up logging
+    log_level = logging.ERROR if quiet else (logging.DEBUG if verbose else logging.INFO)
+    setup_logging(level=log_level)
+    
+    if not quiet:
+        console.print(Panel.fit(
+            "[bold blue]Privacy Redactor RT[/bold blue]\n"
+            "[dim]Privacy Settings Image Analysis[/dim]",
+            border_style="blue"
+        ))
+    
+    try:
+        # Validate input file
+        if not input_file.exists():
+            raise typer.BadParameter(f"Input file does not exist: {input_file}")
+        
+        if not input_file.is_file():
+            raise typer.BadParameter(f"Input path is not a file: {input_file}")
+        
+        # Try to load the image
+        image = cv2.imread(str(input_file))
+        if image is None:
+            raise typer.BadParameter(f"Cannot open image file: {input_file}")
+        
+        if not quiet:
+            console.print(f"[cyan]Analyzing image: {input_file}[/cyan]")
+            console.print(f"[dim]Image dimensions: {image.shape[1]}x{image.shape[0]}[/dim]")
+        
+        # Initialize detector
+        detector = PrivacyUIDetector()
+        
+        # Detect UI elements
+        if not quiet:
+            console.print("[yellow]Detecting UI elements...[/yellow]")
+        
+        elements = detector.detect_privacy_elements(image)
+        
+        if not quiet:
+            console.print(f"[green]Detected {len(elements)} UI elements[/green]")
+        
+        # Filter elements based on options
+        if show_all:
+            display_elements = elements
+            filter_desc = "all detected"
+        else:
+            display_elements = detector.filter_privacy_elements(elements)
+            filter_desc = "enabled privacy settings"
+        
+        # Display results
+        if not quiet:
+            if display_elements:
+                table = Table(title=f"Detected Elements ({filter_desc})")
+                table.add_column("Type", style="cyan")
+                table.add_column("State", style="green")
+                table.add_column("Position", style="yellow")
+                table.add_column("Confidence", style="magenta")
+                
+                for i, element in enumerate(display_elements):
+                    table.add_row(
+                        element.element_type.title(),
+                        element.state.title(),
+                        f"({element.bbox.x1}, {element.bbox.y1}) - ({element.bbox.x2}, {element.bbox.y2})",
+                        f"{element.confidence:.2f}"
+                    )
+                
+                console.print(table)
+                
+                # Summary statistics
+                console.print(f"\n[bold]Summary:[/bold]")
+                console.print(f"Total elements detected: {len(elements)}")
+                console.print(f"Enabled privacy settings: {len(detector.filter_privacy_elements(elements))}")
+                
+                # Count by type
+                type_counts = {}
+                state_counts = {}
+                for elem in elements:
+                    type_counts[elem.element_type] = type_counts.get(elem.element_type, 0) + 1
+                    state_counts[elem.state] = state_counts.get(elem.state, 0) + 1
+                
+                console.print(f"\nBy type: {dict(type_counts)}")
+                console.print(f"By state: {dict(state_counts)}")
+                
+            else:
+                console.print("[yellow]No elements detected matching the criteria[/yellow]")
+        
+        # Generate output image if requested
+        if output_file or not quiet:
+            result_image = detector.draw_bounding_boxes(image, display_elements)
+            
+            if output_file:
+                # Validate output path
+                output_file.parent.mkdir(parents=True, exist_ok=True)
+                
+                success = cv2.imwrite(str(output_file), result_image)
+                if not success:
+                    raise typer.BadParameter(f"Failed to save output image: {output_file}")
+                
+                if not quiet:
+                    console.print(f"[green]✓ Result saved to: {output_file}[/green]")
+            
+            # If no output file specified but not quiet, save to temp file for display info
+            elif not quiet and display_elements:
+                temp_output = input_file.with_suffix('.analyzed.png')
+                cv2.imwrite(str(temp_output), result_image)
+                console.print(f"[dim]Preview saved to: {temp_output}[/dim]")
+        
+        # Exit with appropriate code
+        enabled_count = len(detector.filter_privacy_elements(elements))
+        if enabled_count > 0:
+            if not quiet:
+                console.print(f"\n[bold green]✓ Found {enabled_count} enabled privacy settings[/bold green]")
+        else:
+            if not quiet:
+                console.print(f"\n[yellow]⚠ No enabled privacy settings detected[/yellow]")
+        
+    except typer.BadParameter as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1)
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Analysis interrupted by user[/yellow]")
         raise typer.Exit(130)
     except Exception as e:
         console.print(f"[red]Unexpected error: {e}[/red]")
