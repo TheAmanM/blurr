@@ -99,24 +99,18 @@ function App() {
       const data = snapshot.data();
       if (!pc.current) return;
 
-      // Handle incoming answers. An answer is a response to an offer we sent.
       if (data?.answer && pc.current.signalingState === "have-local-offer") {
         console.log("Received answer, setting remote description.");
         const answerDescription = new RTCSessionDescription(data.answer);
         await pc.current.setRemoteDescription(answerDescription);
       }
 
-      // Handle incoming offers. An offer is an intention to start/change a call.
-      if (data?.offer && pc.current.signalingState === "stable") {
-        console.log("[DEBUG] Received a new offer over Firebase."); // <-- ADD THIS
-        if (data.offer.sdp === pc.current.localDescription?.sdp) {
-          return;
-        }
-
+      if (data?.offer) {
         const offerDescription = new RTCSessionDescription(data.offer);
+        // This check prevents processing the same offer twice
         const isNewOffer =
-          !pc.current.currentRemoteDescription ||
-          pc.current.currentRemoteDescription.sdp !== offerDescription.sdp;
+          pc.current.signalingState === "stable" &&
+          pc.current.currentRemoteDescription?.sdp !== offerDescription.sdp;
 
         if (isNewOffer) {
           console.log("Received new offer, creating answer.");
@@ -138,45 +132,30 @@ function App() {
   /**
    * Initializes the RTCPeerConnection object for a new call.
    */
-  const initializePeerConnection = () => {
+  const initializePeerConnection = (currentCallId: string) => {
     const newPc = new RTCPeerConnection(servers);
 
-    // Add local camera and mic tracks to the connection
     if (localCamStreamRef.current) {
       localCamStreamRef.current.getTracks().forEach((track) => {
         newPc.addTrack(track, localCamStreamRef.current!);
       });
     }
 
-    // This is the updated ontrack handler
     newPc.ontrack = (event) => {
-      console.log(
-        "[DEBUG] ontrack event fired! Received remote track:",
-        event.track.kind,
-        event.track.id
-      ); // <-- MODIFY THIS
       const track = event.track;
-
-      // Differentiate between a screen share track and a camera/mic track
       const isScreenTrack =
         track.kind === "video" && track.getSettings().displaySurface;
 
       if (isScreenTrack) {
-        // Handle the remote screen share stream
         setRemoteScreenStream(new MediaStream([track]));
       } else {
-        // Handle remote camera and microphone tracks by adding them to a single stream
         setRemoteCamStream((prevStream) => {
-          // If a stream already exists, we'll add to it. Otherwise, create a new one.
           const newStream = prevStream
             ? new MediaStream(prevStream.getTracks())
             : new MediaStream();
-
-          // Add the new track if it's not already in the stream
           if (!newStream.getTrackById(track.id)) {
             newStream.addTrack(track);
           }
-
           return newStream;
         });
       }
@@ -190,23 +169,16 @@ function App() {
     };
 
     newPc.onnegotiationneeded = async () => {
-      console.log(
-        `[DEBUG] onnegotiationneeded fired! Signaling state: ${newPc.signalingState}, Call ID: ${callId}`
-      ); // <-- MODIFY THIS LINE
-      if (newPc.signalingState !== "stable" || !callId) {
-        console.log("Skipping negotiation:", newPc.signalingState);
-        console.log(
-          "[DEBUG] Skipping negotiation due to unstable state or missing callId."
-        ); // <-- ADD THIS
+      if (newPc.signalingState !== "stable" || !currentCallId) {
+        console.log("Skipping negotiation: Unstable state or no Call ID.");
         return;
       }
       console.log("Negotiation needed, creating new offer.");
-      console.log("[DEBUG] Negotiation needed, creating new offer."); // <-- MODIFY THIS
       try {
         const offer = await newPc.createOffer();
         await newPc.setLocalDescription(offer);
         if (newPc.localDescription) {
-          const callDocRef = doc(db, "calls", callId);
+          const callDocRef = doc(db, "calls", currentCallId); // Use the argument here
           await updateDoc(callDocRef, {
             offer: newPc.localDescription.toJSON(),
           });
@@ -229,7 +201,7 @@ function App() {
     const newCallId = callDocRef.id;
     setCallId(newCallId);
 
-    initializePeerConnection();
+    initializePeerConnection(newCallId);
     if (!pc.current) return console.error("Peer connection not created");
 
     const offerCandidatesCol = collection(callDocRef, "offerCandidates");
@@ -274,7 +246,7 @@ function App() {
     const callDocSnap = await getDoc(callDocRef);
     if (!callDocSnap.exists()) return alert("Call ID not found.");
 
-    initializePeerConnection();
+    initializePeerConnection(joiningCallId);
     if (!pc.current) return console.error("Peer connection not created");
 
     const offerCandidatesCol = collection(callDocRef, "offerCandidates");
