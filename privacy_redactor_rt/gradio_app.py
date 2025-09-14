@@ -72,15 +72,31 @@ class GradioApp:
         if self.pipeline is None:
             return frame
         
+        # Validate frame
+        if frame.size == 0:
+            return frame
+        
         try:
+            # Ensure frame is contiguous and has proper shape
+            if not frame.flags['C_CONTIGUOUS']:
+                frame = np.ascontiguousarray(frame)
+            
             # Convert RGB to BGR (OpenCV format)
             if len(frame.shape) == 3 and frame.shape[2] == 3:
                 frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
             else:
                 frame_bgr = frame
             
-            # Process through pipeline
-            processed_frame = self.pipeline.process_frame(frame_bgr, 0)
+            # Ensure BGR frame is also contiguous
+            if not frame_bgr.flags['C_CONTIGUOUS']:
+                frame_bgr = np.ascontiguousarray(frame_bgr)
+            
+            # Process through pipeline with incremental frame counter
+            if not hasattr(self, '_frame_counter'):
+                self._frame_counter = 0
+            self._frame_counter += 1
+            
+            processed_frame = self.pipeline.process_frame(frame_bgr, self._frame_counter)
             
             # Convert back to RGB for display
             if len(processed_frame.shape) == 3 and processed_frame.shape[2] == 3:

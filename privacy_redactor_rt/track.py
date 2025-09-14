@@ -61,6 +61,10 @@ class OpticalFlowTracker:
             self._update_prev_frame(frame)
             return
         
+        # Validate frame
+        if frame is None or frame.size == 0:
+            return
+        
         # Convert to grayscale
         if CV2_AVAILABLE:
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -87,6 +91,15 @@ class OpticalFlowTracker:
             self._update_prev_frame(frame)
             return
         
+        # Validate frame dimensions match
+        if prev_gray.shape != gray.shape:
+            # Frame dimensions changed, reset tracking
+            self._update_prev_frame(frame)
+            # Reset flow points for all tracks
+            for track in self.tracks.values():
+                track.flow_points = None
+            return
+        
         # Propagate each track
         tracks_to_remove = []
         for track_id, track in self.tracks.items():
@@ -95,16 +108,26 @@ class OpticalFlowTracker:
                 self._initialize_flow_points(track, prev_gray)
                 continue
             
-            # Calculate optical flow
-            if CV2_AVAILABLE:
-                new_points, status, error = cv2.calcOpticalFlowPyrLK(
-                    prev_gray, gray, track.flow_points, None, **self.lk_params
-                )
-            else:
-                # Fallback for testing - simulate optical flow
-                new_points = track.flow_points + np.random.normal(0, 1, track.flow_points.shape)
-                status = np.ones((len(track.flow_points), 1), dtype=np.uint8)
-                error = np.ones((len(track.flow_points), 1), dtype=np.float32)
+            # Calculate optical flow with error handling
+            try:
+                if CV2_AVAILABLE:
+                    new_points, status, error = cv2.calcOpticalFlowPyrLK(
+                        prev_gray, gray, track.flow_points, None, **self.lk_params
+                    )
+                else:
+                    # Fallback for testing - simulate optical flow
+                    new_points = track.flow_points + np.random.normal(0, 1, track.flow_points.shape)
+                    status = np.ones((len(track.flow_points), 1), dtype=np.uint8)
+                    error = np.ones((len(track.flow_points), 1), dtype=np.float32)
+            except cv2.error as e:
+                # OpenCV error (like pyramid size mismatch), reinitialize flow points
+                self._initialize_flow_points(track, gray)
+                track.age += 1
+                continue
+            except Exception as e:
+                # Other errors, skip this track
+                track.age += 1
+                continue
             
             # Filter good points
             good_mask = status.ravel() == 1

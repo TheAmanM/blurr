@@ -74,10 +74,23 @@ class RealtimePipeline:
         start_time = time.time()
         self.frame_count = frame_idx
         
+        # Validate input frame
+        if frame is None or frame.size == 0:
+            logger.warning(f"Invalid frame {frame_idx}: frame is None or empty")
+            return frame if frame is not None else np.zeros((480, 640, 3), dtype=np.uint8)
+        
+        # Ensure frame has proper dimensions
+        if len(frame.shape) != 3 or frame.shape[2] != 3:
+            logger.warning(f"Invalid frame {frame_idx}: expected 3-channel BGR, got shape {frame.shape}")
+            return frame
+        
         try:
             # Step 1: Propagate existing tracks using optical flow
-            if self.prev_frame is not None:
+            if self.prev_frame is not None and self.prev_frame.shape == frame.shape:
                 self.tracker.propagate_tracks(frame, self.prev_frame)
+            else:
+                # First frame or dimension change, just update prev_frame
+                self.tracker.propagate_tracks(frame, None)
             
             # Step 2: Run text detection if scheduled
             detections = []
@@ -108,7 +121,16 @@ class RealtimePipeline:
             # Step 8: Cleanup and update state
             self.tracker.cleanup_tracks()
             self._cleanup_consensus_buffer()
-            self.prev_frame = frame.copy()
+            
+            # Safely copy frame for next iteration
+            try:
+                if frame.flags['C_CONTIGUOUS']:
+                    self.prev_frame = frame.copy()
+                else:
+                    self.prev_frame = np.ascontiguousarray(frame)
+            except Exception as e:
+                logger.warning(f"Failed to copy frame: {e}")
+                self.prev_frame = None
             
             # Update statistics
             processing_time = time.time() - start_time
