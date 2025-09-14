@@ -38,7 +38,14 @@ This backend is a FastAPI server that receives a WebRTC video stream, applies a 
    ```
 
 3. **Test the endpoint:**
-   - Open `sample_endpoint.html` in your browser.
+   - Open new terminal to create a beta test server
+   - Open sample_endpoint.html (testing server) using:
+
+     ```
+     cd backend
+     python -m http.server 3000
+     ```
+   - Go to http://localhost:3000/sample_endpoint.html
    - Click "Start Camera" to begin streaming and see the blurred video returned from the backend.
 
 ## Testing
