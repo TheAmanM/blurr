@@ -143,16 +143,60 @@ export const useWebRTC = () => {
 
   const startWebcam = useCallback(async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: true,
-        audio: true,
+      // 1. Get the user's camera
+      const rawStream = await navigator.mediaDevices.getUserMedia({
+        video: { width: { ideal: 640 }, height: { ideal: 480 } },
+        audio: false,
       });
-      localStreamRef.current = stream;
-      setLocalStream(stream);
-      return stream;
+
+      // 2. Create a new RTCPeerConnection to the backend
+      const pcToBackend = new RTCPeerConnection({
+        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+      });
+
+      // 3. Add the camera track to the backend connection
+      rawStream.getTracks().forEach(track => {
+        pcToBackend.addTrack(track, rawStream);
+      });
+
+      // 4. Wait for the processed (blurred) stream from the backend
+      const processedStreamPromise = new Promise<MediaStream>((resolve, reject) => {
+        pcToBackend.ontrack = (event) => {
+          if (event.streams && event.streams[0]) {
+            resolve(event.streams[0]);
+          }
+        };
+        pcToBackend.onconnectionstatechange = () => {
+          if (["failed", "disconnected", "closed"].includes(pcToBackend.connectionState)) {
+            reject(new Error("Connection to backend failed"));
+          }
+        };
+      });
+
+      // 5. Create and send offer to FastAPI backend
+      const offer = await pcToBackend.createOffer();
+      await pcToBackend.setLocalDescription(offer);
+      const response = await fetch('http://localhost:8000/offer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sdp: offer.sdp, type: offer.type })
+      });
+      if (!response.ok) {
+        throw new Error(`Backend responded with ${response.status}`);
+      }
+      const answer = await response.json();
+      await pcToBackend.setRemoteDescription(new RTCSessionDescription(answer));
+
+      // 6. Wait for the processed stream
+      const processedStream = await processedStreamPromise;
+
+      // 7. Set the processed stream as the local stream
+      localStreamRef.current = processedStream;
+      setLocalStream(processedStream);
+      return processedStream;
     } catch (err) {
-      console.error("Error accessing media devices:", err);
-      toast.error("Could not access webcam. Please check permissions.");
+      console.error("Error accessing or processing camera:", err);
+      toast.error("Could not access or process webcam. Please check permissions and backend.");
       return null;
     }
   }, []);
