@@ -6,3 +6,6 @@ av
 pytest
 pytest-asyncio
 httpx
+easyocr
+paddleocr
+ultralytics
