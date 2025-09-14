@@ -4,11 +4,13 @@ import subprocess
 import threading
 import time
 import logging
+import shutil
 from pathlib import Path
 from typing import Optional, Dict, Any
 from datetime import datetime
 import numpy as np
 import queue
+import cv2
 
 from .config import RecordingConfig
 
@@ -17,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 
 class MP4Recorder:
-    """MP4 video recorder using FFmpeg with audio preservation."""
+    """MP4 video recorder using FFmpeg with audio preservation, with OpenCV fallback."""
     
     def __init__(self, config: RecordingConfig, width: int = 1280, height: int = 720, fps: int = 30):
         """Initialize MP4 recorder.
@@ -33,22 +35,34 @@ class MP4Recorder:
         self.height = height
         self.fps = fps
         
+        # Check if FFmpeg is available
+        self._has_ffmpeg = shutil.which('ffmpeg') is not None
+        
+        # FFmpeg-specific attributes
         self._process: Optional[subprocess.Popen] = None
+        
+        # OpenCV VideoWriter fallback
+        self._cv_writer: Optional[cv2.VideoWriter] = None
+        
+        # Common attributes
         self._output_path: Optional[Path] = None
         self._frame_count = 0
         self._start_time: Optional[float] = None
         self._is_recording = False
         self._lock = threading.Lock()
         
-        # Audio handling
+        # Audio handling (FFmpeg only)
         self._has_audio = False
         self._audio_sample_rate = 44100
         self._audio_channels = 2
         
-        # Frame queue for constant frame rate
+        # Frame queue for constant frame rate (FFmpeg only)
         self._frame_queue: queue.Queue = queue.Queue(maxsize=fps * 2)  # 2 second buffer
         self._writer_thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
+        
+        if not self._has_ffmpeg:
+            logger.warning("FFmpeg not found, using OpenCV VideoWriter (no audio support)")
         
     def start_recording(self, output_path: Optional[str] = None, has_audio: bool = False,
                        audio_sample_rate: int = 44100, audio_channels: int = 2) -> bool:
@@ -78,45 +92,88 @@ class MP4Recorder:
                 self._output_path.parent.mkdir(parents=True, exist_ok=True)
                 
                 # Store audio parameters
-                self._has_audio = has_audio
+                self._has_audio = has_audio and self._has_ffmpeg  # Audio only with FFmpeg
                 self._audio_sample_rate = audio_sample_rate
                 self._audio_channels = audio_channels
                 
-                # Build FFmpeg command
-                cmd = self._build_ffmpeg_command()
-                
-                logger.info(f"Starting MP4 recording to: {self._output_path}")
-                logger.debug(f"FFmpeg command: {' '.join(cmd)}")
-                
-                # Start FFmpeg process
-                self._process = subprocess.Popen(
-                    cmd,
-                    stdin=subprocess.PIPE,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    bufsize=0
-                )
-                
-                # Reset counters
-                self._frame_count = 0
-                self._start_time = time.time()
-                self._is_recording = True
-                self._stop_event.clear()
-                
-                # Start frame writer thread for CFR
-                if self.config.constant_framerate:
-                    self._writer_thread = threading.Thread(
-                        target=self._cfr_writer_loop,
-                        daemon=True
-                    )
-                    self._writer_thread.start()
-                
-                return True
+                if self._has_ffmpeg:
+                    return self._start_ffmpeg_recording()
+                else:
+                    return self._start_opencv_recording()
                 
             except Exception as e:
                 logger.error(f"Failed to start recording: {e}")
                 self._cleanup()
                 return False
+    
+    def _start_ffmpeg_recording(self) -> bool:
+        """Start recording using FFmpeg."""
+        try:
+            # Build FFmpeg command
+            cmd = self._build_ffmpeg_command()
+            
+            logger.info(f"Starting FFmpeg recording to: {self._output_path}")
+            logger.debug(f"FFmpeg command: {' '.join(cmd)}")
+            
+            # Start FFmpeg process
+            self._process = subprocess.Popen(
+                cmd,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                bufsize=0
+            )
+            
+            # Reset counters
+            self._frame_count = 0
+            self._start_time = time.time()
+            self._is_recording = True
+            self._stop_event.clear()
+            
+            # Start frame writer thread for CFR
+            if self.config.constant_framerate:
+                self._writer_thread = threading.Thread(
+                    target=self._cfr_writer_loop,
+                    daemon=True
+                )
+                self._writer_thread.start()
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to start FFmpeg recording: {e}")
+            return False
+    
+    def _start_opencv_recording(self) -> bool:
+        """Start recording using OpenCV VideoWriter."""
+        try:
+            # Use MP4V codec for better compatibility
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            
+            logger.info(f"Starting OpenCV recording to: {self._output_path}")
+            
+            # Initialize OpenCV VideoWriter
+            self._cv_writer = cv2.VideoWriter(
+                str(self._output_path),
+                fourcc,
+                self.fps,
+                (self.width, self.height)
+            )
+            
+            if not self._cv_writer.isOpened():
+                logger.error("Failed to open OpenCV VideoWriter")
+                return False
+            
+            # Reset counters
+            self._frame_count = 0
+            self._start_time = time.time()
+            self._is_recording = True
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to start OpenCV recording: {e}")
+            return False
     
     def write_frame(self, frame: np.ndarray) -> bool:
         """Write a video frame.
@@ -127,7 +184,7 @@ class MP4Recorder:
         Returns:
             True if frame written successfully
         """
-        if not self._is_recording or self._process is None:
+        if not self._is_recording:
             return False
             
         try:
@@ -135,24 +192,44 @@ class MP4Recorder:
             if frame.shape != (self.height, self.width, 3):
                 logger.warning(f"Frame size mismatch: expected ({self.height}, {self.width}, 3), got {frame.shape}")
                 return False
-                
-            # Convert BGR to RGB for FFmpeg
-            rgb_frame = frame[:, :, ::-1]
             
-            if self.config.constant_framerate and self._writer_thread is not None:
-                # Use CFR queue
-                try:
-                    self._frame_queue.put(rgb_frame, timeout=0.1)
-                    return True
-                except queue.Full:
-                    logger.warning("Frame queue full, dropping frame")
-                    return False
+            if self._has_ffmpeg and self._process is not None:
+                return self._write_frame_ffmpeg(frame)
+            elif self._cv_writer is not None:
+                return self._write_frame_opencv(frame)
             else:
-                # Direct write
-                return self._write_frame_direct(rgb_frame)
+                return False
                 
         except Exception as e:
             logger.error(f"Error writing frame: {e}")
+            return False
+    
+    def _write_frame_ffmpeg(self, frame: np.ndarray) -> bool:
+        """Write frame using FFmpeg."""
+        # Convert BGR to RGB for FFmpeg
+        rgb_frame = frame[:, :, ::-1]
+        
+        if self.config.constant_framerate and self._writer_thread is not None:
+            # Use CFR queue
+            try:
+                self._frame_queue.put(rgb_frame, timeout=0.1)
+                return True
+            except queue.Full:
+                logger.warning("Frame queue full, dropping frame")
+                return False
+        else:
+            # Direct write
+            return self._write_frame_direct(rgb_frame)
+    
+    def _write_frame_opencv(self, frame: np.ndarray) -> bool:
+        """Write frame using OpenCV VideoWriter."""
+        try:
+            # OpenCV expects BGR format
+            self._cv_writer.write(frame)
+            self._frame_count += 1
+            return True
+        except Exception as e:
+            logger.error(f"Error writing frame with OpenCV: {e}")
             return False
     
     def write_audio_samples(self, samples: np.ndarray) -> bool:
@@ -188,51 +265,71 @@ class MP4Recorder:
                 return {}
                 
             try:
-                # Signal stop to CFR thread
-                self._stop_event.set()
-                
-                # Wait for CFR thread to finish
-                if self._writer_thread is not None:
-                    self._writer_thread.join(timeout=5.0)
-                
-                # Close FFmpeg stdin to signal end
-                if self._process and self._process.stdin:
-                    self._process.stdin.close()
-                
-                # Wait for FFmpeg to finish
-                if self._process:
-                    try:
-                        stdout, stderr = self._process.communicate(timeout=30.0)
-                        return_code = self._process.returncode
-                    except subprocess.TimeoutExpired:
-                        logger.warning("FFmpeg process timeout, terminating")
-                        self._process.terminate()
-                        stdout, stderr = self._process.communicate(timeout=5.0)
-                        return_code = self._process.returncode
-                    
-                    if return_code != 0:
-                        logger.error(f"FFmpeg failed with code {return_code}")
-                        logger.error(f"FFmpeg stderr: {stderr.decode()}")
-                    else:
-                        logger.info("Recording completed successfully")
-                
-                # Calculate statistics
-                duration = time.time() - self._start_time if self._start_time else 0
-                stats = {
-                    'output_path': str(self._output_path) if self._output_path else None,
-                    'duration_seconds': duration,
-                    'frame_count': self._frame_count,
-                    'average_fps': self._frame_count / duration if duration > 0 else 0,
-                    'file_size_bytes': self._output_path.stat().st_size if self._output_path and self._output_path.exists() else 0
-                }
-                
-                return stats
+                if self._has_ffmpeg and self._process is not None:
+                    return self._stop_ffmpeg_recording()
+                elif self._cv_writer is not None:
+                    return self._stop_opencv_recording()
+                else:
+                    return {}
                 
             except Exception as e:
                 logger.error(f"Error stopping recording: {e}")
                 return {}
             finally:
                 self._cleanup()
+    
+    def _stop_ffmpeg_recording(self) -> Dict[str, Any]:
+        """Stop FFmpeg recording."""
+        # Signal stop to CFR thread
+        self._stop_event.set()
+        
+        # Wait for CFR thread to finish
+        if self._writer_thread is not None:
+            self._writer_thread.join(timeout=5.0)
+        
+        # Close FFmpeg stdin to signal end
+        if self._process and self._process.stdin:
+            self._process.stdin.close()
+        
+        # Wait for FFmpeg to finish
+        if self._process:
+            try:
+                stdout, stderr = self._process.communicate(timeout=30.0)
+                return_code = self._process.returncode
+            except subprocess.TimeoutExpired:
+                logger.warning("FFmpeg process timeout, terminating")
+                self._process.terminate()
+                stdout, stderr = self._process.communicate(timeout=5.0)
+                return_code = self._process.returncode
+            
+            if return_code != 0:
+                logger.error(f"FFmpeg failed with code {return_code}")
+                logger.error(f"FFmpeg stderr: {stderr.decode()}")
+            else:
+                logger.info("FFmpeg recording completed successfully")
+        
+        return self._get_recording_stats()
+    
+    def _stop_opencv_recording(self) -> Dict[str, Any]:
+        """Stop OpenCV recording."""
+        if self._cv_writer:
+            self._cv_writer.release()
+            self._cv_writer = None
+            logger.info("OpenCV recording completed successfully")
+        
+        return self._get_recording_stats()
+    
+    def _get_recording_stats(self) -> Dict[str, Any]:
+        """Get recording statistics."""
+        duration = time.time() - self._start_time if self._start_time else 0
+        stats = {
+            'output_path': str(self._output_path) if self._output_path else None,
+            'duration_seconds': duration,
+            'frame_count': self._frame_count,
+            'average_fps': self._frame_count / duration if duration > 0 else 0,
+            'file_size_bytes': self._output_path.stat().st_size if self._output_path and self._output_path.exists() else 0
+        }
+        return stats
     
     def is_recording(self) -> bool:
         """Check if currently recording."""
@@ -375,6 +472,7 @@ class MP4Recorder:
         """Clean up resources."""
         self._is_recording = False
         
+        # Cleanup FFmpeg process
         if self._process:
             try:
                 if self._process.poll() is None:  # Process still running
@@ -384,6 +482,15 @@ class MP4Recorder:
                 logger.error(f"Error terminating FFmpeg process: {e}")
             finally:
                 self._process = None
+        
+        # Cleanup OpenCV VideoWriter
+        if self._cv_writer:
+            try:
+                self._cv_writer.release()
+            except Exception as e:
+                logger.error(f"Error releasing OpenCV VideoWriter: {e}")
+            finally:
+                self._cv_writer = None
         
         # Clear frame queue
         while not self._frame_queue.empty():
