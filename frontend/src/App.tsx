@@ -91,30 +91,34 @@ function App() {
       const data = snapshot.data();
       if (!pc.current) return;
 
+      // Handle incoming answers (this part is fine)
       if (data?.answer && pc.current.signalingState === "have-local-offer") {
         const answerDescription = new RTCSessionDescription(data.answer);
         await pc.current.setRemoteDescription(answerDescription);
       }
 
+      // Handle incoming offers
       if (data?.offer) {
-        const shouldProcessOffer =
-          isOfferer || pc.current.connectionState === "connected";
+        // --- THIS IS THE CRITICAL FIX ---
+        // The creator should ignore offers until the connection is established.
+        if (isOfferer && pc.current.connectionState !== "connected") {
+          return;
+        }
 
-        if (shouldProcessOffer) {
-          const offerDescription = new RTCSessionDescription(data.offer);
-          if (
-            pc.current.currentRemoteDescription?.sdp !== offerDescription.sdp
-          ) {
-            await pc.current.setRemoteDescription(offerDescription);
-            const answer = await pc.current.createAnswer();
-            await pc.current.setLocalDescription(answer);
-            if (pc.current.localDescription) {
-              await updateDoc(callDocRef, {
-                answer: pc.current.localDescription.toJSON(),
-                offer: deleteField(),
-              });
-            }
-          }
+        // Prevent processing the same offer again
+        if (pc.current.currentRemoteDescription?.sdp === data.offer.sdp) {
+          return;
+        }
+
+        const offerDescription = new RTCSessionDescription(data.offer);
+        await pc.current.setRemoteDescription(offerDescription);
+        const answer = await pc.current.createAnswer();
+        await pc.current.setLocalDescription(answer);
+        if (pc.current.localDescription) {
+          await updateDoc(callDocRef, {
+            answer: pc.current.localDescription.toJSON(),
+            offer: deleteField(),
+          });
         }
       }
     });
@@ -187,13 +191,17 @@ function App() {
   const handleCreateCall = async () => {
     if (!localStream) return alert("Please start your webcam first!");
     setCallStatus("creating");
-    const callDocRef = await addDoc(collection(db, "calls"), {});
-    const newCallId = callDocRef.id;
-    setCallId(newCallId);
 
+    // 1. Create a document reference locally without saving to Firestore yet.
+    // This gives us an ID to work with immediately.
+    const callDocRef = doc(collection(db, "calls"));
+    const newCallId = callDocRef.id;
+
+    // 2. Initialize the peer connection with the new ID.
     initializePeerConnection(newCallId, true);
     if (!pc.current) return console.error("Peer connection not created");
 
+    // 3. Set up all necessary listeners.
     const offerCandidatesCol = collection(callDocRef, "offerCandidates");
     const answerCandidatesCol = collection(callDocRef, "answerCandidates");
 
@@ -202,13 +210,6 @@ function App() {
     };
 
     setupSignalingListeners(callDocRef, true);
-
-    const offerDescription = await pc.current.createOffer();
-    await pc.current.setLocalDescription(offerDescription);
-    const offer = { sdp: offerDescription.sdp, type: offerDescription.type };
-    await setDoc(callDocRef, { offer });
-
-    setCallStatus("waiting");
 
     const unsubCandidates = onSnapshot(
       query(answerCandidatesCol),
@@ -221,6 +222,18 @@ function App() {
       }
     );
     signalingUnsubscribers.current.push(unsubCandidates);
+
+    // 4. Create the offer.
+    const offerDescription = await pc.current.createOffer();
+    await pc.current.setLocalDescription(offerDescription);
+    const offer = { sdp: offerDescription.sdp, type: offerDescription.type };
+
+    // 5. Now, create the document in Firestore WITH the offer included.
+    await setDoc(callDocRef, { offer });
+
+    // 6. FINALLY, update the UI state to show the user the Call ID.
+    setCallId(newCallId);
+    setCallStatus("waiting");
   };
 
   /**
