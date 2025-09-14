@@ -112,31 +112,33 @@ class TextDetector:
             return []
     
     def _opencv_detect(self, image):
-        """Simple OpenCV-based text detection using contours"""
+        """Improved OpenCV-based text detection using contours and aspect ratio filtering"""
         try:
             gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-            
+
             # Apply morphological operations to detect text-like regions
             kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
             grad = cv2.morphologyEx(gray, cv2.MORPH_GRADIENT, kernel)
-            
+
             # Threshold
             _, thresh = cv2.threshold(grad, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
-            
+
             # Connect horizontally oriented regions
             kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (9, 1))
             connected = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
-            
+
             # Find contours
             contours, _ = cv2.findContours(connected, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            
+
             boxes = []
             for contour in contours:
                 x, y, w, h = cv2.boundingRect(contour)
-                # Filter by size (likely text regions)
-                if w > 20 and h > 10 and h < 50:  # Adjust thresholds as needed
+                aspect_ratio = w / h if h > 0 else 0
+                area = w * h
+                # Stricter: wider, larger, and not too tall
+                if w > 40 and h > 10 and h < 50 and aspect_ratio > 3.0 and area > 400:
                     boxes.append((x, y, w, h))
-            
+
             return boxes
         except Exception as e:
             print(f"OpenCV detection error: {e}")
