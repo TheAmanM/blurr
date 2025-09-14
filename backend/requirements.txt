@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+aiortc
+opencv-python
+av
+pytest
+pytest-asyncio
+httpx

@@ -1,1 +1,8 @@
-frontend/node_modules
+# Frontend
+node_modules
+
+# Backend
+.venv
+__pycache__
+*.pyc
+.pytest_cache
