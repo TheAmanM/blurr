@@ -1,5 +1,9 @@
 # Blurr: Real-Time Privacy for the Creator Economy
 
+![Image](https://github.com/user-attachments/assets/fe0e70b9-c3a6-45fc-b440-4a5b34fc555f)
+
+_A preview of Blurr showing our software detecting and blurring sensitive information live._
+
 ## 🚀 Inspiration
 
 In the creator economy, a single mistake can be catastrophic. Streamers, educators, and professionals live in constant fear of accidentally revealing a password, an API key, a phone number, or a private document during a live broadcast. A split-second error can lead to doxxing, financial loss, and a breach of trust with their audience. Existing solutions are manual and reactive—requiring streamers to use clumsy overlays or simply "be more careful." We knew there had to be a better way: a proactive, intelligent safety net that protects creators without them even thinking about it.
@@ -45,30 +49,14 @@ Blurr is architected as a highly scalable, low-latency cloud service designed fo
 * **Proactive Copyright Protection:** Building models to identify copyrighted music or video content in real-time, helping creators avoid DMCA strikes before they happen.
 * **Enterprise Expansion:** Adapting Blurr for the corporate world to protect sensitive information during enterprise video calls and remote presentations on platforms like Zoom and Microsoft Teams.
 
----
+### Built With
 
-**Built With**
+The technologies that we used to build Blurr include, but are not limited to:
 
-* python
-* webrtc
-* yolo
-* opencv
-* kubernetes
-* pytorch
-* gcp
-
-***
-
-### System Design Techniques for Scaling
-
-As you requested, let's touch on the system design techniques used to scale a service like Blurr.
-
-1.  **Global Load Balancing (GLB):** This is the front door. A GLB directs the incoming stream from a platform (like Twitch) not just to our service, but to the specific regional cluster that is geographically closest to the streamer. This is the first and most critical step in reducing latency.
-
-2.  **Horizontal Pod Autoscaling (HPA) in Kubernetes:** We can't have a fixed number of processing servers. HPA automatically monitors the CPU/GPU load of our ML inference pods. When traffic surges (e.g., during a major gaming event), HPA automatically spins up new pods to handle the load. When traffic subsides, it scales them back down to save costs.
-
-3.  **Dedicated Network Peering:** To further reduce latency and increase reliability, we would establish direct network peering connections with our major partners (Twitch, YouTube). This creates a private, high-speed highway between their data centers and ours, bypassing the potential congestion of the public internet.
-
-4.  **CQRS (Command Query Responsibility Segregation):** While not for the video path itself, this pattern is useful for our backend services like the user dashboard and analytics. The "Command" side handles the high-volume ingestion of redaction events from the streams. The "Query" side handles the creator fetching their "Guardian Report." Separating these allows us to scale each part independently. For instance, the event ingestion needs to be extremely fast and scalable, while the query side can be optimized for complex data retrieval.
-
-5.  **Asynchronous Processing for Analytics:** The generation of the Guardian Report doesn't need to be instantaneous. As redaction events occur, they are published to a message queue (like RabbitMQ or Kafka). Separate worker services consume from this queue to process the data, generate thumbnails, and populate the analytics database. This decouples the real-time video path from the "after-the-fact" reporting, ensuring that a spike in reporting requests can't impact stream processing performance.
+![Python](https://img.shields.io/badge/python-3670A0?style=for-the-badge&logo=python&logoColor=ffdd54)
+![WebRTC](https://img.shields.io/badge/webrtc-333333?style=for-the-badge&logo=webrtc&logoColor=white)
+![YOLO](https://img.shields.io/badge/yolo-00ADD8?style=for-the-badge&logo=yolo&logoColor=white)
+![OpenCV](https://img.shields.io/badge/opencv-5C3EE8?style=for-the-badge&logo=opencv&logoColor=white)
+![React.js](https://img.shields.io/badge/react_js-61DAFB?style=for-the-badge&logo=react&logoColor=white)
+![Vite](https://img.shields.io/badge/vite-646CFF?style=for-the-badge&logo=vite&logoColor=white)
+![OCR](https://img.shields.io/badge/tesseract-F44708?style=for-the-badge&logo=tesseract&logoColor=white)
