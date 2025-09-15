@@ -1,6 +1,6 @@
 # Blurr: Real-Time Privacy for the Creator Economy
 
-![Image](https://github.com/user-attachments/assets/fe0e70b9-c3a6-45fc-b440-4a5b34fc555f)
+![Hero image](https://github.com/user-attachments/assets/9e47b9b5-823b-47f5-8114-03fea5dc8b23)
 
 _A preview of Blurr showing our software detecting and blurring sensitive information live._
 
@@ -15,6 +15,10 @@ In the creator economy, a single mistake can be catastrophic. Streamers, educato
 * **Autonomous Redaction:** Intelligently identifies and blurs passwords, phone numbers, emails, API keys, private documents, and more.
 * **Zero Performance Impact:** All AI processing happens on our powerful cloud infrastructure. This means **0% local CPU/GPU usage**, so creators can dedicate their PC's full power to gaming and encoding.
 * **Seamless Integration:** Functions as a simple "Privacy Mode" toggle within the streaming platform's native dashboard. No downloads, no complicated setup.
+
+### Example
+
+![Image](https://github.com/user-attachments/assets/fe0e70b9-c3a6-45fc-b440-4a5b34fc555f)
 
 ### 🛠️ How we built it
 
